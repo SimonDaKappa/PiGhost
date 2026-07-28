@@ -170,7 +170,6 @@
 
 #include <pthread.h>
 #include <semaphore.h>
-#include <stdatomic.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -183,6 +182,70 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+// ===========================================================================
+// ABI/Cross-language utilities
+// ===========================================================================
+
+
+#ifdef __cplusplus
+#define PGIPC_ALIGNAS(n) alignas(n)
+#else
+#define PGIPC_ALIGNAS(n) _Alignas(n)
+#endif
+
+/** Marker for what should be a atomic_* type but isn't for cross-language ABI stability
+ * and reinterpretation.
+ *
+ * Plain, fixed-width, non "_Atomic/atomic_*" types. Accessed only through
+ * pgipc__a{load,store,fetch_add}_*(), never through <stdatomic.h>'s
+ * atomic_load()/atomic_store()/etc, which require an _Atomic-qualified (C) or
+ * std::atomic<T> (C++) operand and will not accept these.
+ */
+#define PGIPC_ATOMIC
+
+
+/** pgipc__a{load,store,fetch_add}_{i32,u32,bool} - the single, unified atomic
+ * primitive used throughout, for cross-language ABI stability.
+ *
+ * <stdatomic.h>'s atomic_load()/atomic_store()/atomic_fetch_add() require a pointer to
+ * an _Atomic-qualified type in C and a pointer to std::atomic<T> in C++. Since every
+ * field these helpers touch is deliberately a plain, fixed-width, non-_Atomic type (a
+ * plain int32_t has one obvious binary layout; an _Atomic int / std::atomic<int> does
+ * not, and differs across compilers/languages), <stdatomic.h>'s macros cannot be used
+ * on them at all.
+ *
+ * Instead, every atomic access goes through the GNU/Clang-common __atomic_* builtins,
+ * which operate on any object of a matching size/alignment and are supported
+ * identically by both compilers in both C and C++.
+ *
+ * Note the converse also holds and this must be applied uniformly rather than
+ * mixed with <stdatomic.h>: __atomic_* builtins reject genuinely
+ * _Atomic-qualified/std::atomic<T> operands under Clang (both C and C++) and under GCC
+ * in C++ mode. Do not mix them together, and just use the PGIPC_ATOMIC flavor.
+ */
+
+static inline int32_t pgipc__aload_i32(const int32_t *p) {
+  return __atomic_load_n(p, __ATOMIC_SEQ_CST);
+}
+static inline void pgipc__astore_i32(int32_t *p, int32_t v) {
+  __atomic_store_n(p, v, __ATOMIC_SEQ_CST);
+}
+static inline uint32_t pgipc__aload_u32(const uint32_t *p) {
+  return __atomic_load_n(p, __ATOMIC_SEQ_CST);
+}
+static inline void pgipc__astore_u32(uint32_t *p, uint32_t v) {
+  __atomic_store_n(p, v, __ATOMIC_SEQ_CST);
+}
+static inline uint32_t pgipc__afetch_add_u32(uint32_t *p, uint32_t v) {
+  return __atomic_fetch_add(p, v, __ATOMIC_SEQ_CST);
+}
+static inline bool pgipc__aload_bool(const bool *p) {
+  return __atomic_load_n(p, __ATOMIC_SEQ_CST);
+}
+static inline void pgipc__astore_bool(bool *p, bool v) {
+  __atomic_store_n(p, v, __ATOMIC_SEQ_CST);
+}
 
 // ===========================================================================
 // Shared-memory frame ring
@@ -200,34 +263,35 @@ extern "C" {
 
 /**
  * struct pgipc_shm_ring_t - frame buffer shared memory ring
- * @latest_ready:  index of newest complete frame, -1 if none
- * @reader_locked: index reader currently holds, -1 if none
- * @frame_counter: monotonically increasing frame id, global
- * @generation:    bumped by display on every activation switch; a writer whose granted
- *                 generation no longer matches this has been evicted and must stop
- *                 writing
- * @frame_id:      frame id stamped into each buffer at write time
- * @write_ts:      when each buffer was published (for latency calc)
- * @buffers:       individual frame buffers (PIXELS payload mode only; in the DMABUF
- *                 mode the indices refer to the writer's announced dmabuf set and this
- *                 array is unused)
+ * @latest_ready:     index of newest complete frame, -1 if none
+ * @reader_locked:    index reader currently holds, -1 if none
+ * @frame_counter:    monotonically increasing frame id, global
+ * @generation:       bumped by display on every activation switch; a writer whose
+ *                    granted generation no longer matches this has been evicted and
+ *                    must stop writing
+ * @frame_id:         frame id stamped into each buffer at write time
+ * @write_ts:         when each buffer was published (for latency calc)
+ * @buffers:          individual frame buffers (PIXELS payload mode only; in the DMABUF
+ *                    mode the indices refer to the writer's announced dmabuf set)
  * @bookkeeping_lock: cross-process mutex serializing @latest_ready/@reader_locked
- *                 updates (see pgipc__ring_lock()); guards bookkeeping only, never the
- *                 pixel copy
+ *                    updates. guards bookkeeping only, never the pixel copy
  *
- * Shared, mmap()-able layout used by both sides of the connection; never allocate or
- * copy this struct by value, only ever map it at a fixed address via
+ * Shared, mmap()-able layout used by both sides of the connection.
+ *
+ * Never allocate or copy this struct by value, only ever map it at a fixed address via
  * pgipc_shm_ring_create()/pgipc_shm_ring_attach().
  *
  * NOTE: layout is byte-for-byte identical across payload mode. The dmabuf mode is
  * purely a control-plane extension; slot indices mean the same thing in both modes.
+ * NOTE: @latest_ready/@reader_locked/@frame_counter/@generation are aligned on separate
+ * cache lines to help with the cross process/thread hammering on them.
  */
 typedef struct {
-  atomic_int latest_ready;
-  atomic_int reader_locked;
-  atomic_uint frame_counter;
+  PGIPC_ATOMIC PGIPC_ALIGNAS(64) int32_t latest_ready;
+  PGIPC_ATOMIC PGIPC_ALIGNAS(64) int32_t reader_locked;
+  PGIPC_ATOMIC PGIPC_ALIGNAS(64) uint32_t frame_counter;
   struct timespec write_ts[PGIPC_NUM_BUFFERS];
-  atomic_uint generation;
+  PGIPC_ATOMIC PGIPC_ALIGNAS(64) uint32_t generation;
   uint64_t frame_id[PGIPC_NUM_BUFFERS];
   pthread_mutex_t bookkeeping_lock;
   unsigned char frame_bufs[PGIPC_NUM_BUFFERS][PGIPC_FRAME_MAX_SIZE];
@@ -689,15 +753,15 @@ typedef struct {
   char app_id[PGIPC_APP_ID_LEN];
   int ctrl_fd;
   pgipc_shm_ring_t *ring;
-  atomic_bool active;
-  atomic_bool running;
-  atomic_uint granted_generation;
+  PGIPC_ATOMIC bool active;
+  PGIPC_ATOMIC bool running;
+  PGIPC_ATOMIC uint32_t granted_generation;
   pgipc_render_mode_t mode;
   sem_t *fsem;
   pthread_t ctrl_thread;
   pthread_mutex_t send_lock;
-  atomic_int payload_kind;
-  atomic_int dmabuf_ack_state;
+  PGIPC_ATOMIC int32_t payload_kind;
+  PGIPC_ATOMIC int32_t dmabuf_ack_state;
 } pgipc_writer_ctx_t;
 
 /**
@@ -959,8 +1023,8 @@ static int pgipc__writer_handle_grant(pgipc_writer_ctx_t *ctx,
     return -1;
   }
 
-  atomic_store(&ctx->granted_generation, grant->generation);
-  atomic_store(&ctx->active, true);
+  pgipc__astore_u32(&ctx->granted_generation, grant->generation);
+  pgipc__astore_bool(&ctx->active, true);
 
   printf("[pgipc:%s] ACTIVATED, generation=%u\n", ctx->app_id, grant->generation);
   fflush(stdout);
@@ -991,8 +1055,9 @@ static void pgipc__ring_unlock(pgipc_shm_ring_t *ring) {
 
 #ifdef LIBPGIPC_READER
 PGIPC_DEF pgipc_shm_ring_t *pgipc_shm_ring_create(void) {
-  if (ATOMIC_INT_LOCK_FREE != 2) {
-    fprintf(stderr, "[pgipc] WARNING: atomic_int is not always lock-free on this "
+  if (!__atomic_always_lock_free(sizeof(int32_t), 0) ||
+      !__atomic_always_lock_free(sizeof(uint32_t), 0)) {
+    fprintf(stderr, "[pgipc] WARNING: 32-bit atomics are not always lock-free on this "
                     "platform; cross-process atomics may not work as intended.\n");
   }
 
@@ -1020,10 +1085,10 @@ PGIPC_DEF pgipc_shm_ring_t *pgipc_shm_ring_create(void) {
   }
 
   memset(ring, 0, sizeof(pgipc_shm_ring_t));
-  atomic_store(&ring->latest_ready, -1);
-  atomic_store(&ring->reader_locked, -1);
-  atomic_store(&ring->frame_counter, 0);
-  atomic_store(&ring->generation, 0);
+  pgipc__astore_i32(&ring->latest_ready, -1);
+  pgipc__astore_i32(&ring->reader_locked, -1);
+  pgipc__astore_u32(&ring->frame_counter, 0);
+  pgipc__astore_u32(&ring->generation, 0);
 
   pthread_mutexattr_t attr;
   pthread_mutexattr_init(&attr);
@@ -1057,23 +1122,23 @@ PGIPC_DEF sem_t *pgipc_shm_sem_create(void) {
 
 PGIPC_DEF int pgipc_shm_ring_checkout(pgipc_shm_ring_t *ring) {
   pgipc__ring_lock(ring);
-  int idx = atomic_load(&ring->latest_ready);
+  int idx = pgipc__aload_i32(&ring->latest_ready);
   if (idx >= 0)
-    atomic_store(&ring->reader_locked, idx);
+    pgipc__astore_i32(&ring->reader_locked, idx);
   pgipc__ring_unlock(ring);
   return idx;
 }
 
 PGIPC_DEF void pgipc_shm_ring_release(pgipc_shm_ring_t *ring) {
   pgipc__ring_lock(ring);
-  atomic_store(&ring->reader_locked, -1);
+  pgipc__astore_i32(&ring->reader_locked, -1);
   pgipc__ring_unlock(ring);
 }
 
 PGIPC_DEF void pgipc_evict_writer(pgipc_shm_ring_t *ring) {
   pgipc__ring_lock(ring);
-  atomic_fetch_add(&ring->generation, 1);
-  atomic_store(&ring->latest_ready, -1);
+  pgipc__afetch_add_u32(&ring->generation, 1);
+  pgipc__astore_i32(&ring->latest_ready, -1);
   pgipc__ring_unlock(ring);
 }
 #endif /* LIBPGIPC_READER */
@@ -1130,8 +1195,8 @@ PGIPC_DEF sem_t *pgipc_shm_sem_attach(int max_retries, int retry_delay_ms) {
 
 PGIPC_DEF int pgipc_shm_ring_pick_write_slot(pgipc_shm_ring_t *ring) {
   pgipc__ring_lock(ring);
-  int ready = atomic_load(&ring->latest_ready);
-  int locked = atomic_load(&ring->reader_locked);
+  int ready = pgipc__aload_i32(&ring->latest_ready);
+  int locked = pgipc__aload_i32(&ring->reader_locked);
 
   int slot = 0;
   for (int i = 0; i < PGIPC_NUM_BUFFERS; i++) {
@@ -1150,7 +1215,7 @@ PGIPC_DEF void pgipc_shm_ring_publish(pgipc_shm_ring_t *ring, int idx,
   ring->frame_id[idx] = frame_id;
   ring->write_ts[idx] = ts;
   pgipc__ring_lock(ring);
-  atomic_store(&ring->latest_ready, idx);
+  pgipc__astore_i32(&ring->latest_ready, idx);
   pgipc__ring_unlock(ring);
 }
 #endif /* LIBPGIPC_WRITER */
@@ -1415,17 +1480,17 @@ static void *pgipc__writer_ctrl(void *arg) {
 
   setsockopt(ctx->ctrl_fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 
-  while (atomic_load(&ctx->running)) {
+  while (pgipc__aload_bool(&ctx->running)) {
     struct timespec now;
     clock_gettime(CLOCK_MONOTONIC, &now);
 
     long since_hb_ms = (now.tv_sec - last_heartbeat.tv_sec) * 1000 +
                        (now.tv_nsec - last_heartbeat.tv_nsec) / 1000000;
 
-    if (atomic_load(&ctx->active) && since_hb_ms >= PGIPC_HEARTBEAT_INTERVAL_MS) {
+    if (pgipc__aload_bool(&ctx->active) && since_hb_ms >= PGIPC_HEARTBEAT_INTERVAL_MS) {
       pgipc_heartbeat_msg_t hb = {
-          .generation = atomic_load(&ctx->granted_generation),
-          .frame_counter = ctx->ring ? atomic_load(&ctx->ring->frame_counter) : 0,
+          .generation = pgipc__aload_u32(&ctx->granted_generation),
+          .frame_counter = ctx->ring ? pgipc__aload_u32(&ctx->ring->frame_counter) : 0,
       };
 
       pthread_mutex_lock(&ctx->send_lock);
@@ -1437,7 +1502,7 @@ static void *pgipc__writer_ctrl(void *arg) {
     long since_req_ms = (now.tv_sec - last_activate_attempt.tv_sec) * 1000 +
                         (now.tv_nsec - last_activate_attempt.tv_nsec) / 1000000;
 
-    if (!atomic_load(&ctx->active) && since_req_ms >= PGIPC_RETRY_ACTIVATE_MS) {
+    if (!pgipc__aload_bool(&ctx->active) && since_req_ms >= PGIPC_RETRY_ACTIVATE_MS) {
       pthread_mutex_lock(&ctx->send_lock);
       pgipc_ctrl_send(ctx->ctrl_fd, PGIPC_MSG_ACTIVATE_REQUEST, NULL, 0);
       pthread_mutex_unlock(&ctx->send_lock);
@@ -1475,7 +1540,7 @@ static void *pgipc__writer_ctrl(void *arg) {
       break;
     }
     case PGIPC_MSG_DEACTIVATE:
-      atomic_store(&ctx->active, false);
+      pgipc__astore_bool(&ctx->active, false);
       printf("[pgipc:%s] DEACTIVATED (another app took over)\n", ctx->app_id);
       fflush(stdout);
       break;
@@ -1485,13 +1550,13 @@ static void *pgipc__writer_ctrl(void *arg) {
       memcpy(&ack, buf, sizeof(ack) < len ? sizeof(ack) : len);
 
       if (ack.accepted) {
-        atomic_store(&ctx->payload_kind, PGIPC_PAYLOAD_DMABUF);
-        atomic_store(&ctx->dmabuf_ack_state, 1);
+        pgipc__astore_i32(&ctx->payload_kind, PGIPC_PAYLOAD_DMABUF);
+        pgipc__astore_i32(&ctx->dmabuf_ack_state, 1);
         printf("[pgipc:%s] dmabuf set accepted; session is now zero-copy\n",
                ctx->app_id);
       } else {
         ack.reason[PGIPC_DENY_REASON_LEN - 1] = '\0';
-        atomic_store(&ctx->dmabuf_ack_state, -1);
+        pgipc__astore_i32(&ctx->dmabuf_ack_state, -1);
         printf("[pgipc:%s] dmabuf set refused: %s (staying in PIXELS mode)\n",
                ctx->app_id, ack.reason);
       }
@@ -1516,10 +1581,10 @@ PGIPC_DEF pgipc_writer_ctx_t *pgipc_writer_connect(const char *app_id,
 
   strncpy(ctx->app_id, app_id, PGIPC_APP_ID_LEN - 1);
   pthread_mutex_init(&ctx->send_lock, NULL);
-  atomic_store(&ctx->running, true);
-  atomic_store(&ctx->active, false);
-  atomic_store(&ctx->payload_kind, PGIPC_PAYLOAD_PIXELS);
-  atomic_store(&ctx->dmabuf_ack_state, 0);
+  pgipc__astore_bool(&ctx->running, true);
+  pgipc__astore_bool(&ctx->active, false);
+  pgipc__astore_i32(&ctx->payload_kind, PGIPC_PAYLOAD_PIXELS);
+  pgipc__astore_i32(&ctx->dmabuf_ack_state, 0);
 
   int fd = -1;
   for (int i = 0; i < 100; i++) {
@@ -1622,7 +1687,7 @@ PGIPC_DEF pgipc_writer_ctx_t *pgipc_writer_connect(const char *app_id,
 }
 
 PGIPC_DEF bool pgipc_writer_is_active(pgipc_writer_ctx_t *ctx) {
-  return atomic_load(&ctx->active);
+  return pgipc__aload_bool(&ctx->active);
 }
 
 PGIPC_DEF pgipc_render_mode_t pgipc_writer_negotiated_mode(pgipc_writer_ctx_t *ctx) {
@@ -1630,7 +1695,7 @@ PGIPC_DEF pgipc_render_mode_t pgipc_writer_negotiated_mode(pgipc_writer_ctx_t *c
 }
 
 PGIPC_DEF pgipc_payload_kind_t pgipc_writer_payload_kind(pgipc_writer_ctx_t *ctx) {
-  return (pgipc_payload_kind_t)atomic_load(&ctx->payload_kind);
+  return (pgipc_payload_kind_t)pgipc__aload_i32(&ctx->payload_kind);
 }
 
 PGIPC_DEF int
@@ -1644,7 +1709,7 @@ pgipc_writer_announce_dmabufs(pgipc_writer_ctx_t *ctx, const int fds[PGIPC_NUM_B
   for (int i = 0; i < PGIPC_NUM_BUFFERS; i++)
     msg.desc[i] = desc[i];
 
-  atomic_store(&ctx->dmabuf_ack_state, 0);
+  pgipc__astore_i32(&ctx->dmabuf_ack_state, 0);
 
   pthread_mutex_lock(&ctx->send_lock);
   int rc = pgipc_ctrl_send_fds(ctx->ctrl_fd, PGIPC_MSG_DMABUF_ANNOUNCE, &msg,
@@ -1659,7 +1724,7 @@ pgipc_writer_announce_dmabufs(pgipc_writer_ctx_t *ctx, const int fds[PGIPC_NUM_B
   struct timespec poll_ts = {.tv_sec = 0, .tv_nsec = 5 * 1000000L};
   long waited_ms = 0;
   for (;;) {
-    int st = atomic_load(&ctx->dmabuf_ack_state);
+    int st = pgipc__aload_i32(&ctx->dmabuf_ack_state);
 
     if (st == 1)
       return 0;
@@ -1678,10 +1743,11 @@ PGIPC_DEF int pgipc_writer_write_slot(pgipc_writer_ctx_t *ctx) {
 
 PGIPC_DEF void pgipc_writer_publish(pgipc_writer_ctx_t *ctx, int idx,
                                     uint64_t frame_id) {
-  if (!atomic_load(&ctx->active))
+  if (!pgipc__aload_bool(&ctx->active))
     return;
-  if (atomic_load(&ctx->ring->generation) != atomic_load(&ctx->granted_generation)) {
-    atomic_store(&ctx->active, false);
+  if (pgipc__aload_u32(&ctx->ring->generation) !=
+      pgipc__aload_u32(&ctx->granted_generation)) {
+    pgipc__astore_bool(&ctx->active, false);
     return;
   }
 
@@ -1694,7 +1760,7 @@ PGIPC_DEF void pgipc_writer_publish(pgipc_writer_ctx_t *ctx, int idx,
 }
 
 PGIPC_DEF void pgipc_writer_disconnect(pgipc_writer_ctx_t *ctx) {
-  atomic_store(&ctx->running, false);
+  pgipc__astore_bool(&ctx->running, false);
 
   pthread_join(ctx->ctrl_thread, NULL);
   pgipc_ctrl_send(ctx->ctrl_fd, PGIPC_MSG_DISCONNECT, NULL, 0);
