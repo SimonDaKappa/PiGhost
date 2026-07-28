@@ -1140,7 +1140,7 @@ PGIPC_DEF int pgipc_shm_ring_pick_write_slot(pgipc_shm_ring_t *ring) {
       break;
     }
   }
-  /* Unreachable when PGIPC_NUM_BUFFERS>=3 and only 2 reserved slots. */
+
   pgipc__ring_unlock(ring);
   return slot;
 }
