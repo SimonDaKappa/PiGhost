@@ -144,7 +144,7 @@ static void pgipc__control_activate(pgipc_control_plane_t *cp, int idx) {
                     0);
   }
 
-  uint32_t generation = atomic_load(&cp->ring->generation);
+  uint32_t generation = pgipc__aload_u32(&cp->ring->generation);
   pgipc_session_table_activate(&cp->table, idx, generation);
 
   pgipc_grant_msg_t grant = {.generation = generation};
