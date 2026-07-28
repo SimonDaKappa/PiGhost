@@ -211,6 +211,9 @@ extern "C" {
  * @buffers:       individual frame buffers (PIXELS payload mode only; in the DMABUF
  *                 mode the indices refer to the writer's announced dmabuf set and this
  *                 array is unused)
+ * @bookkeeping_lock: cross-process mutex serializing @latest_ready/@reader_locked
+ *                 updates (see pgipc__ring_lock()); guards bookkeeping only, never the
+ *                 pixel copy
  *
  * Shared, mmap()-able layout used by both sides of the connection; never allocate or
  * copy this struct by value, only ever map it at a fixed address via
@@ -226,6 +229,7 @@ typedef struct {
   struct timespec write_ts[PGIPC_NUM_BUFFERS];
   atomic_uint generation;
   uint64_t frame_id[PGIPC_NUM_BUFFERS];
+  pthread_mutex_t bookkeeping_lock;
   unsigned char frame_bufs[PGIPC_NUM_BUFFERS][PGIPC_FRAME_MAX_SIZE];
 } pgipc_shm_ring_t;
 
@@ -968,6 +972,23 @@ static int pgipc__writer_handle_grant(pgipc_writer_ctx_t *ctx,
 // shm ring implementation
 // ---------------------------------------------------------------------------
 
+/** pgipc__ring_lock() - acquire @ring's bookkeeping mutex
+ * @ring: attached/created ring
+ *
+ * Recovers from a prior holder crashing (EOWNERDEAD) instead of deadlocking.
+ */
+static void pgipc__ring_lock(pgipc_shm_ring_t *ring) {
+  int rc = pthread_mutex_lock(&ring->bookkeeping_lock);
+  if (rc == EOWNERDEAD) {
+    pthread_mutex_consistent(&ring->bookkeeping_lock);
+  }
+}
+
+/** pgipc__ring_unlock() - release @ring's bookkeeping mutex */
+static void pgipc__ring_unlock(pgipc_shm_ring_t *ring) {
+  pthread_mutex_unlock(&ring->bookkeeping_lock);
+}
+
 #ifdef LIBPGIPC_READER
 PGIPC_DEF pgipc_shm_ring_t *pgipc_shm_ring_create(void) {
   if (ATOMIC_INT_LOCK_FREE != 2) {
@@ -1003,12 +1024,22 @@ PGIPC_DEF pgipc_shm_ring_t *pgipc_shm_ring_create(void) {
   atomic_store(&ring->reader_locked, -1);
   atomic_store(&ring->frame_counter, 0);
   atomic_store(&ring->generation, 0);
+
+  pthread_mutexattr_t attr;
+  pthread_mutexattr_init(&attr);
+  pthread_mutexattr_setpshared(&attr, PTHREAD_PROCESS_SHARED);
+  pthread_mutexattr_setrobust(&attr, PTHREAD_MUTEX_ROBUST);
+  pthread_mutex_init(&ring->bookkeeping_lock, &attr);
+  pthread_mutexattr_destroy(&attr);
+
   return ring;
 }
 
 PGIPC_DEF void pgipc_shm_ring_destroy(pgipc_shm_ring_t *ring) {
-  if (ring)
+  if (ring) {
+    pthread_mutex_destroy(&ring->bookkeeping_lock);
     munmap(ring, sizeof(pgipc_shm_ring_t));
+  }
   shm_unlink(PGIPC_SHM_NAME);
 }
 
@@ -1025,21 +1056,25 @@ PGIPC_DEF sem_t *pgipc_shm_sem_create(void) {
 }
 
 PGIPC_DEF int pgipc_shm_ring_checkout(pgipc_shm_ring_t *ring) {
+  pgipc__ring_lock(ring);
   int idx = atomic_load(&ring->latest_ready);
-  if (idx < 0)
-    return -1;
-
-  atomic_store(&ring->reader_locked, idx);
+  if (idx >= 0)
+    atomic_store(&ring->reader_locked, idx);
+  pgipc__ring_unlock(ring);
   return idx;
 }
 
 PGIPC_DEF void pgipc_shm_ring_release(pgipc_shm_ring_t *ring) {
+  pgipc__ring_lock(ring);
   atomic_store(&ring->reader_locked, -1);
+  pgipc__ring_unlock(ring);
 }
 
 PGIPC_DEF void pgipc_evict_writer(pgipc_shm_ring_t *ring) {
+  pgipc__ring_lock(ring);
   atomic_fetch_add(&ring->generation, 1);
   atomic_store(&ring->latest_ready, -1);
+  pgipc__ring_unlock(ring);
 }
 #endif /* LIBPGIPC_READER */
 
@@ -1094,23 +1129,29 @@ PGIPC_DEF sem_t *pgipc_shm_sem_attach(int max_retries, int retry_delay_ms) {
 }
 
 PGIPC_DEF int pgipc_shm_ring_pick_write_slot(pgipc_shm_ring_t *ring) {
+  pgipc__ring_lock(ring);
   int ready = atomic_load(&ring->latest_ready);
   int locked = atomic_load(&ring->reader_locked);
 
+  int slot = 0;
   for (int i = 0; i < PGIPC_NUM_BUFFERS; i++) {
-    if (i != ready && i != locked)
-      return i;
+    if (i != ready && i != locked) {
+      slot = i;
+      break;
+    }
   }
 
-  /* Unreachable when PGIPC_NUM_BUFFERS>=3 and only 2 reserved slots. */
-  return 0;
+  pgipc__ring_unlock(ring);
+  return slot;
 }
 
 PGIPC_DEF void pgipc_shm_ring_publish(pgipc_shm_ring_t *ring, int idx,
                                       uint64_t frame_id, struct timespec ts) {
   ring->frame_id[idx] = frame_id;
   ring->write_ts[idx] = ts;
+  pgipc__ring_lock(ring);
   atomic_store(&ring->latest_ready, idx);
+  pgipc__ring_unlock(ring);
 }
 #endif /* LIBPGIPC_WRITER */
 
