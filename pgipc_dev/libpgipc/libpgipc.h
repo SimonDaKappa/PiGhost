@@ -187,23 +187,20 @@ extern "C" {
 // ABI/Cross-language utilities
 // ===========================================================================
 
-
 #ifdef __cplusplus
 #define PGIPC_ALIGNAS(n) alignas(n)
 #else
 #define PGIPC_ALIGNAS(n) _Alignas(n)
 #endif
 
-/** Marker for what should be a atomic_* type but isn't for cross-language ABI stability
- * and reinterpretation.
+/** Marker for what should be a atomic_*|_Atomic type but isn't for cross-language ABI
+ * stability and reinterpretation.
  *
- * Plain, fixed-width, non "_Atomic/atomic_*" types. Accessed only through
- * pgipc__a{load,store,fetch_add}_*(), never through <stdatomic.h>'s
- * atomic_load()/atomic_store()/etc, which require an _Atomic-qualified (C) or
- * std::atomic<T> (C++) operand and will not accept these.
+ * Plain, fixed-width, types. Accessed only through pgipc__a{load,store,fetch_add}_*(),
+ * never through <stdatomic.h>'s atomic_load()/atomic_store()/etc, which require an
+ * _Atomic-qualified (C) or std::atomic<T> (C++) operand and will not accept these.
  */
 #define PGIPC_ATOMIC
-
 
 /** pgipc__a{load,store,fetch_add}_{i32,u32,bool} - the single, unified atomic
  * primitive used throughout, for cross-language ABI stability.
@@ -220,9 +217,9 @@ extern "C" {
  * identically by both compilers in both C and C++.
  *
  * Note the converse also holds and this must be applied uniformly rather than
- * mixed with <stdatomic.h>: __atomic_* builtins reject genuinely
- * _Atomic-qualified/std::atomic<T> operands under Clang (both C and C++) and under GCC
- * in C++ mode. Do not mix them together, and just use the PGIPC_ATOMIC flavor.
+ * mixed with <stdatomic.h>: __atomic_* builtins reject _Atomic-qualified/std::atomic<T>
+ * operands under Clang (both C/C++) and under GCC (C++). Do not mix them together, and
+ * just use the PGIPC_ATOMIC flavor.
  */
 
 static inline int32_t pgipc__aload_i32(const int32_t *p) {
@@ -284,7 +281,8 @@ static inline void pgipc__astore_bool(bool *p, bool v) {
  * NOTE: layout is byte-for-byte identical across payload mode. The dmabuf mode is
  * purely a control-plane extension; slot indices mean the same thing in both modes.
  * NOTE: @latest_ready/@reader_locked/@frame_counter/@generation are aligned on separate
- * cache lines to help with the cross process/thread hammering on them.
+ * cache lines to help with the cross process/thread hammering on them at high
+ * framerates.
  */
 typedef struct {
   PGIPC_ATOMIC PGIPC_ALIGNAS(64) int32_t latest_ready;
@@ -731,38 +729,8 @@ PGIPC_DEF void pgipc_dmabuf_set_close(pgipc_dmabuf_set_t *set);
 
 #define PGIPC_RETRY_ACTIVATE_MS 2000
 
-/**
- * struct pgipc_writer_ctx_t - writer session handle
- * @app_id:             writer application id
- * @ctrl_fd:            fd to domain socket for control protocol
- * @ring:               frame buffer shared memory
- * @active:             true once granted AND not yet deactivated/evicted
- * @running:            false once we should shut down entirely
- * @granted_generation: current generation number granted by display
- * @mode:               negotiated resolution/fps once accepted
- * @fsem:               semaphore to signal the display on each publish
- * @ctrl_thread:        background thread owning the control socket
- * @send_lock:          serializes writes to ctrl_fd from multiple callers
- * @payload_kind:       PGIPC_PAYLOAD_PIXELS until a dmabuf announce is ACKed
- * @dmabuf_ack_state:   0 = pending/none, 1 = accepted, -1 = refused
- *
- * Opaque to callers in spirit (treat as a handle); returned by pgipc_writer_connect()
- * and passed to every other pgipc_writer_*() call.
- */
-typedef struct {
-  char app_id[PGIPC_APP_ID_LEN];
-  int ctrl_fd;
-  pgipc_shm_ring_t *ring;
-  PGIPC_ATOMIC bool active;
-  PGIPC_ATOMIC bool running;
-  PGIPC_ATOMIC uint32_t granted_generation;
-  pgipc_render_mode_t mode;
-  sem_t *fsem;
-  pthread_t ctrl_thread;
-  pthread_mutex_t send_lock;
-  PGIPC_ATOMIC int32_t payload_kind;
-  PGIPC_ATOMIC int32_t dmabuf_ack_state;
-} pgipc_writer_ctx_t;
+/** pgipc_writer_cxt_t - writer session handle */
+typedef struct _pgipc_writer_ctx_t pgipc_writer_ctx_t;
 
 /**
  * pgipc_writer_connect() - establish a writer session with the display
@@ -998,6 +966,39 @@ static int pgipc__recv_all(int fd, void *buf, size_t len) {
 }
 
 #ifdef LIBPGIPC_WRITER
+
+/**
+ * struct pgipc_writer_ctx_t - writer session handle implementation
+ * @app_id:             writer application id
+ * @ctrl_fd:            fd to domain socket for control protocol
+ * @ring:               frame buffer shared memory
+ * @active:             true once granted AND not yet deactivated/evicted
+ * @running:            false once we should shut down entirely
+ * @granted_generation: current generation number granted by display
+ * @mode:               negotiated resolution/fps once accepted
+ * @fsem:               semaphore to signal the display on each publish
+ * @ctrl_thread:        background thread owning the control socket
+ * @send_lock:          serializes writes to ctrl_fd from multiple callers
+ * @payload_kind:       PGIPC_PAYLOAD_PIXELS until a dmabuf announce is ACKed
+ * @dmabuf_ack_state:   0 = pending/none, 1 = accepted, -1 = refused
+ *
+ * Opaque to writers/callers. Returned by pgipc_writer_connect() and passed to every
+ * other pgipc_writer_*() call.
+ */
+struct _pgipc_writer_ctx_t {
+  char app_id[PGIPC_APP_ID_LEN];
+  int ctrl_fd;
+  pgipc_shm_ring_t *ring;
+  PGIPC_ATOMIC bool active;
+  PGIPC_ATOMIC bool running;
+  PGIPC_ATOMIC uint32_t granted_generation;
+  pgipc_render_mode_t mode;
+  sem_t *fsem;
+  pthread_t ctrl_thread;
+  pthread_mutex_t send_lock;
+  PGIPC_ATOMIC int32_t payload_kind;
+  PGIPC_ATOMIC int32_t dmabuf_ack_state;
+};
 
 /** pgipc__writer_handle_grant() - shared grant-processing path used by both
  * the synchronous connect()-time handshake and the async ctrl thread.
