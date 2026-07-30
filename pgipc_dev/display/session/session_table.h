@@ -30,15 +30,15 @@ extern "C" {
 
 /**
  * enum pgipc_session_state_t - per-client state machine
+ * @PGIPC_SESSION_CONNECTED:  socket accepted, no PGIPC_MSG_CONNECT yet
+ * @PGIPC_SESSION_NEGOTIATED: mode accepted; not the current ACTIVE writer
+ * @PGIPC_SESSION_ACTIVE:     holds the current activation grant
+ * @PGIPC_SESSION_REJECTED:   mode negotiation failed; connection closing
  */
 typedef enum {
-  // Socket accepted, no PGIPC_MSG_CONNECT yet
   PGIPC_SESSION_CONNECTED = 0,
-  // Mode accepted; not the current ACTIVE writer
   PGIPC_SESSION_NEGOTIATED = 1,
-  // Holds the current activation grant
   PGIPC_SESSION_ACTIVE = 2,
-  // Mode negotiation failed; connection closing
   PGIPC_SESSION_REJECTED = 3,
 } pgipc_session_state_t;
 

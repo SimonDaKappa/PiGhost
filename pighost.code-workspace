@@ -1,0 +1,36 @@
+{
+    "folders": [
+        {
+            "name": "docs",
+            "path": "docs"
+        },
+        {
+            "name": "yocto",
+            "path": "yocto"
+        },
+        {
+            "name": "libpgipc",
+            "path": "pgipc_dev/libpgipc"
+        },
+        {
+            "name": "display",
+            "path": "pgipc_dev/display"
+        },
+        {
+            "name": "moving_sine_wave_cpu",
+            "path": "pgipc_dev/writers/moving_sine_wave_cpu"
+        },
+        {
+            "name": "moving_sine_wave_gpu",
+            "path": "pgipc_dev/writers/moving_sine_wave_gpu"
+        }
+    ],
+    "settings": {
+        "[c]": {
+            "editor.defaultFormatter": "ms-vscode.cpptools"
+        },
+        "[cpp]": {
+            "editor.defaultFormatter": "ms-vscode.cpptools"
+        }
+    }
+}

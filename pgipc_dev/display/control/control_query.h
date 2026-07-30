@@ -25,6 +25,8 @@ extern "C" {
 
 /**
  * enum pgipc_control_query_type_t - what kind of request is pending
+ * @PGIPC_CTRL_QUERY_LIST:   list all connected/negotiated clients
+ * @PGIPC_CTRL_QUERY_SWITCH: switch out the active negotiated client
  */
 typedef enum {
   PGIPC_CTRL_QUERY_LIST = 0,
@@ -127,7 +129,7 @@ pgipc_control_query_channel_drain(pgipc_control_query_channel_t *chan);
 
 /**
  * pgipc_control_query_complete() - control thread: signal a query is done
- * @query: query returned by pgipc_control_query_channel_drain(), with its output 
+ * @query: query returned by pgipc_control_query_channel_drain(), with its output
  *         field(s) already filled in
  *
  * Wakes the admin thread blocked in pgipc_control_query_submit().
