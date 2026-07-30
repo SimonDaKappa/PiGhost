@@ -45,25 +45,29 @@ extern "C" {
 
 /**
  * enum pgipc_admin_msg_type_t - admin protocol message types
+ * @PGIPC_ADMIN_MSG_LIST_REQUEST:    client -> display: send me a session table snapshot
+ * @PGIPC_ADMIN_MSG_LIST_RESPONSE:   display -> client: snapshot reply
+ * @PGIPC_ADMIN_MSG_SWITCH_REQUEST:  client -> display: activate this app_id
+ * @PGIPC_ADMIN_MSG_SWITCH_RESPONSE: display -> client: outcome
  *
- * A deliberately separate, smaller enum from pgipc_msg_type_t ( admin messages ride the
+ * A deliberately separate, smaller enum from pgipc_msg_type_t (admin messages ride the
  * same 1-byte-type + 4-byte-BE-length framing for pgipc_ctrl_send/recv) but must never
  * be confusable with producer control messages, even though the two protocols share
  * framing code and could theoretically be sent down the wrong socket by a bug.
  */
 typedef enum {
-  // client -> display: "send me a session table snapshot"
   PGIPC_ADMIN_MSG_LIST_REQUEST = 1,
-  // display -> client: snapshot reply, payload pgipc_admin_list_response_t
   PGIPC_ADMIN_MSG_LIST_RESPONSE = 2,
-  // client -> display: "activate this app_id", payload pgipc_admin_switch_request_t
   PGIPC_ADMIN_MSG_SWITCH_REQUEST = 3,
-  // display -> client: outcome, payload pgipc_admin_switch_response_t
   PGIPC_ADMIN_MSG_SWITCH_RESPONSE = 4,
 } pgipc_admin_msg_type_t;
 
 /**
  * enum pgipc_admin_client_state_t - wire representation of session state
+ * @PGIPC_ADMIN_STATE_CONNECTED:  $$$SIMON TODO
+ * @PGIPC_ADMIN_STATE_NEGOTIATED: $$$SIMON TODO
+ * @PGIPC_ADMIN_STATE_ACTIVE:     $$$SIMON TODO
+ * @PGIPC_ADMIN_STATE_REJECTED:   $$$SIMON TODO
  *
  * Intentionally a separate enum from the display's internal pgipc_session_state_t:
  * this header must not depend on that internal representation, so the admin plane is
@@ -82,7 +86,7 @@ typedef enum {
  * @app_id:          NUL-terminated app id
  * @state:           current session state (wire enum, see above)
  * @negotiated_mode: valid once state is NEGOTIATED or ACTIVE
- * @payload_kind:    PIXELS or DMABUF (pgipc_payload_kind_t). That enum IS declared 
+ * @payload_kind:    PIXELS or DMABUF (pgipc_payload_kind_t). That enum IS declared
  *                   unconditionally, so reusing it here directly is fine.
  */
 typedef struct {
