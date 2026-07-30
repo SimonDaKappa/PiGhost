@@ -6,17 +6,8 @@
 #include <stdio.h>
 #include <time.h>
 
-/* pgipc__timespec_diff_ns() - (@a - @b) in nanoseconds, both CLOCK_MONOTONIC. */
-static uint64_t pgipc__timespec_diff_ns(struct timespec a, struct timespec b) {
-  int64_t sec_diff = (int64_t)a.tv_sec - (int64_t)b.tv_sec;
-  int64_t nsec_diff = (int64_t)a.tv_nsec - (int64_t)b.tv_nsec;
-  int64_t total = sec_diff * 1000000000LL + nsec_diff;
-  return total > 0 ? (uint64_t)total : 0;
-}
-
-int pgipc_data_plane_init(pgipc_data_plane_t *dp, pgipc_shm_ring_t *ring,
-                           sem_t *fsem, pgipc_fb_sink_t *sink,
-                           uint32_t width, uint32_t height) {
+int pgipc_data_plane_init(pgipc_data_plane_t *dp, pgipc_shm_ring_t *ring, sem_t *fsem,
+                          pgipc_fb_sink_t *sink, uint32_t width, uint32_t height) {
   dp->ring = ring;
   dp->fsem = fsem;
   dp->sink = sink;
@@ -29,22 +20,20 @@ int pgipc_data_plane_init(pgipc_data_plane_t *dp, pgipc_shm_ring_t *ring,
   atomic_store(&dp->stats.last_write_to_render_ns, 0);
 
   if (pgipc_fb_sink_open(sink, width, height) != 0) {
-    fprintf(stderr, "[data_plane] sink open failed at %ux%u\n", width,
-            height);
+    fprintf(stderr, "[data_plane] sink open failed at %ux%u\n", width, height);
     return -1;
   }
   return 0;
 }
 
 void pgipc_data_plane_set_mode(pgipc_data_plane_t *dp, uint32_t width,
-                                uint32_t height) {
-  /* this is a deliberately lock-free, best-effort update raced against 
+                               uint32_t height) {
+  /* this is a deliberately lock-free, best-effort update raced against
    * the loop thread. */
   dp->width = width;
   dp->height = height;
   if (pgipc_fb_sink_open(dp->sink, width, height) != 0)
-    fprintf(stderr, "[data_plane] sink re-open failed at %ux%u\n", width,
-            height);
+    fprintf(stderr, "[data_plane] sink re-open failed at %ux%u\n", width, height);
 }
 
 void *pgipc_data_plane_run(void *arg) {
@@ -70,10 +59,10 @@ void *pgipc_data_plane_run(void *arg) {
 
     /* Safe to read only now that checkout() holds reader_locked == idx;
      * a writers publish already does a generation check which guarantees
-     * an evicted writer's frame stop landing in the ring, so this frame 
+     * an evicted writer's frame stop landing in the ring, so this frame
      * is legal */
     uint64_t frame_id = dp->ring->frame_id[idx];
-    struct timespec write_ts = dp->ring->write_ts[idx];
+    uint64_t write_ts_ns = dp->ring->write_ts_ns[idx];
     const unsigned char *pixels = dp->ring->frame_bufs[idx];
 
     uint32_t width = dp->width;
@@ -83,6 +72,7 @@ void *pgipc_data_plane_run(void *arg) {
 
     struct timespec now;
     clock_gettime(CLOCK_MONOTONIC, &now);
+    uint64_t now_ns = ((uint64_t)now.tv_sec * 1000000000ULL) + now.tv_nsec;
 
     pgipc_shm_ring_release(dp->ring);
 
@@ -92,8 +82,7 @@ void *pgipc_data_plane_run(void *arg) {
     }
 
     atomic_fetch_add(&dp->stats.frames_rendered, 1);
-    atomic_store(&dp->stats.last_write_to_render_ns,
-                 pgipc__timespec_diff_ns(now, write_ts));
+    atomic_store(&dp->stats.last_write_to_render_ns, now_ns - write_ts_ns);
   }
 
   return NULL;

@@ -187,20 +187,41 @@ extern "C" {
 // ABI/Cross-language utilities
 // ===========================================================================
 
+
+#ifdef __cplusplus
+#define PGIPC_SASSERT(c, m) static_assert(c, m)
+#else
+#define PGIPC_SASSERT(c, m) _Static_assert(c, m)
+#endif
+
 #ifdef __cplusplus
 #define PGIPC_ALIGNAS(n) alignas(n)
+#define PGIPC_ALIGNOF(t) alignof(t)
 #else
 #define PGIPC_ALIGNAS(n) _Alignas(n)
+#define PGIPC_ALIGNOF(t) _Alignof(t)
 #endif
+
+#define PGIPC_CAT_(a, b) a##b
+#define PGIPC_CAT(a, b) PGIPC_CAT_(a, b)
+
+#define PGIPC_CACHELINE 64
+#define PGIPC_CACHELINE_FIELD(type, name)                                              \
+  union {                                                                              \
+    PGIPC_ALIGNAS(PGIPC_CACHELINE) type name;                                          \
+    unsigned char PGIPC_CAT(pad_, __LINE__)[PGIPC_CACHELINE];                          \
+  }
 
 /** Marker for what should be a atomic_*|_Atomic type but isn't for cross-language ABI
  * stability and reinterpretation.
  *
- * Plain, fixed-width, types. Accessed only through pgipc__a{load,store,fetch_add}_*(),
- * never through <stdatomic.h>'s atomic_load()/atomic_store()/etc, which require an
- * _Atomic-qualified (C) or std::atomic<T> (C++) operand and will not accept these.
+ * Plain, fixed-width, non "_Atomic/atomic_*" types. Accessed only through
+ * pgipc__a{load,store,fetch_add}_*(), never through <stdatomic.h>'s
+ * atomic_load()/atomic_store()/etc, which require an _Atomic-qualified (C) or
+ * std::atomic<T> (C++) operand and will not accept these.
  */
 #define PGIPC_ATOMIC
+
 
 /** pgipc__a{load,store,fetch_add}_{i32,u32,bool} - the single, unified atomic
  * primitive used throughout, for cross-language ABI stability.
@@ -217,9 +238,9 @@ extern "C" {
  * identically by both compilers in both C and C++.
  *
  * Note the converse also holds and this must be applied uniformly rather than
- * mixed with <stdatomic.h>: __atomic_* builtins reject _Atomic-qualified/std::atomic<T>
- * operands under Clang (both C/C++) and under GCC (C++). Do not mix them together, and
- * just use the PGIPC_ATOMIC flavor.
+ * mixed with <stdatomic.h>: __atomic_* builtins reject genuinely
+ * _Atomic-qualified/std::atomic<T> operands under Clang (both C and C++) and under GCC
+ * in C++ mode. Do not mix them together, and just use the PGIPC_ATOMIC flavor.
  */
 
 static inline int32_t pgipc__aload_i32(const int32_t *p) {
@@ -244,6 +265,13 @@ static inline void pgipc__astore_bool(bool *p, bool v) {
   __atomic_store_n(p, v, __ATOMIC_SEQ_CST);
 }
 
+static inline uint64_t pgipc__ts_diff_ns(struct timespec a, struct timespec b) {
+  int64_t sec_diff = (int64_t)a.tv_sec - (int64_t)b.tv_sec;
+  int64_t nsec_diff = (int64_t)a.tv_nsec - (int64_t)b.tv_nsec;
+  int64_t total = sec_diff * 1000000000LL + nsec_diff;
+  return total > 0 ? (uint64_t)total : 0;
+}
+
 // ===========================================================================
 // Shared-memory frame ring
 // ===========================================================================
@@ -259,7 +287,7 @@ static inline void pgipc__astore_bool(bool *p, bool v) {
   ((size_t)PGIPC_FRAME_MAX_WIDTH * PGIPC_FRAME_MAX_HEIGHT * PGIPC_BYTES_PER_PIXEL)
 
 /**
- * struct pgipc_shm_ring_t - frame buffer shared memory ring
+ * struct pgipc_shm_ring_t - frame buffer shared memory ring for both conn sides
  * @latest_ready:     index of newest complete frame, -1 if none
  * @reader_locked:    index reader currently holds, -1 if none
  * @frame_counter:    monotonically increasing frame id, global
@@ -267,33 +295,43 @@ static inline void pgipc__astore_bool(bool *p, bool v) {
  *                    granted generation no longer matches this has been evicted and
  *                    must stop writing
  * @frame_id:         frame id stamped into each buffer at write time
- * @write_ts:         when each buffer was published (for latency calc)
- * @buffers:          individual frame buffers (PIXELS payload mode only; in the DMABUF
+ * @write_ts_ns:      when each buffer was published (for latency calc)
+ * @frame_bufs:       individual frame buffers (PIXELS payload mode only; in the DMABUF
  *                    mode the indices refer to the writer's announced dmabuf set)
  * @bookkeeping_lock: cross-process mutex serializing @latest_ready/@reader_locked
  *                    updates. guards bookkeeping only, never the pixel copy
  *
- * Shared, mmap()-able layout used by both sides of the connection.
- *
  * Never allocate or copy this struct by value, only ever map it at a fixed address via
- * pgipc_shm_ring_create()/pgipc_shm_ring_attach().
+ * @pgipc_shm_ring_create() and @pgipc_shm_ring_attach().
  *
- * NOTE: layout is byte-for-byte identical across payload mode. The dmabuf mode is
+ * @note layout is byte-for-byte identical across payload mode. The dmabuf mode is
  * purely a control-plane extension; slot indices mean the same thing in both modes.
- * NOTE: @latest_ready/@reader_locked/@frame_counter/@generation are aligned on separate
+ *
+ * @note latest_ready, reader_locked, frame_counter, generation are aligned on separate
  * cache lines to help with the cross process/thread hammering on them at high
  * framerates.
  */
 typedef struct {
-  PGIPC_ATOMIC PGIPC_ALIGNAS(64) int32_t latest_ready;
-  PGIPC_ATOMIC PGIPC_ALIGNAS(64) int32_t reader_locked;
-  PGIPC_ATOMIC PGIPC_ALIGNAS(64) uint32_t frame_counter;
-  struct timespec write_ts[PGIPC_NUM_BUFFERS];
-  PGIPC_ATOMIC PGIPC_ALIGNAS(64) uint32_t generation;
+  PGIPC_ATOMIC PGIPC_CACHELINE_FIELD(int32_t, latest_ready);
+  PGIPC_ATOMIC PGIPC_CACHELINE_FIELD(int32_t, reader_locked);
+  PGIPC_ATOMIC PGIPC_CACHELINE_FIELD(uint32_t, frame_counter);
+  PGIPC_ATOMIC PGIPC_CACHELINE_FIELD(uint32_t, generation);
   uint64_t frame_id[PGIPC_NUM_BUFFERS];
-  pthread_mutex_t bookkeeping_lock;
+  uint64_t write_ts_ns[PGIPC_NUM_BUFFERS];
   unsigned char frame_bufs[PGIPC_NUM_BUFFERS][PGIPC_FRAME_MAX_SIZE];
+  pthread_mutex_t bookkeeping_lock;
 } pgipc_shm_ring_t;
+
+PGIPC_SASSERT(offsetof(pgipc_shm_ring_t, latest_ready) == 0 * PGIPC_CACHELINE,
+              "field spacing drift");
+PGIPC_SASSERT(offsetof(pgipc_shm_ring_t, reader_locked) == 1 * PGIPC_CACHELINE,
+              "field spacing drift");
+PGIPC_SASSERT(offsetof(pgipc_shm_ring_t, frame_counter) == 2 * PGIPC_CACHELINE,
+              "field spacing drift");
+PGIPC_SASSERT(offsetof(pgipc_shm_ring_t, generation) == 3 * PGIPC_CACHELINE,
+              "field spacing drift");
+PGIPC_SASSERT(PGIPC_ALIGNOF(pgipc_shm_ring_t) == PGIPC_CACHELINE,
+              "ring alignment drift");
 
 #ifdef LIBPGIPC_READER
 /**
@@ -398,14 +436,14 @@ PGIPC_DEF int pgipc_shm_ring_pick_write_slot(pgipc_shm_ring_t *ring);
  * @idx:      buffer index previously returned by
  *            pgipc_shm_ring_pick_write_slot()
  * @frame_id: writer-assigned monotonically increasing frame id
- * @ts:       timestamp the write completed (CLOCK_MONOTONIC), used by the display for
+ * @now_ns:   timestamp the write completed (CLOCK_MONOTONIC), used by the display for
  *            latency accounting
  *
  * Low-level primitive; writer applications normally call pgipc_writer_publish()
  * instead, which also handles the semaphore post and generation/eviction check.
  */
 PGIPC_DEF void pgipc_shm_ring_publish(pgipc_shm_ring_t *ring, int idx,
-                                      uint64_t frame_id, struct timespec ts);
+                                      uint64_t frame_id, uint64_t now_ns);
 #endif /* LIBPGIPC_WRITER */
 
 // ===========================================================================
@@ -419,30 +457,31 @@ PGIPC_DEF void pgipc_shm_ring_publish(pgipc_shm_ring_t *ring, int idx,
 
 /**
  * enum pgipc_msg_type_t - control protocol message types
+ * @PGIPC_MSG_CONNECT:          writer -> display: "here's what I support"
+ * @PGIPC_MSG_MODE:             display -> writer: "render at this mode" / reject
+ * @PGIPC_MSG_ACTIVATE_REQUEST: writer -> display: "let me be the writer"
+ * @PGIPC_MSG_ACTIVATE_GRANT:   display -> writer: "you're it, generation N"
+ * @PGIPC_MSG_ACTIVATE_DENY:    display -> writer: "no, and here's why"
+ * @PGIPC_MSG_HEARTBEAT:        writer -> display: "still alive, gen N, frame F"
+ * @PGIPC_MSG_DEACTIVATE:       display -> writer: "stand down, someone else active"
+ * @PGIPC_MSG_DISCONNECT:       writer -> display: "graceful disconnect"
+ * @PGIPC_MSG_DMABUF_ANNOUNCE:  writer -> display: "my frames live in these GPU
+ *                              buffers". payload is pgipc_dmabuf_announce_msg_t, and
+ *                              exactly PGIPC_NUM_BUFFERS dmabuf fds ride alongside in
+ *                              SCM_RIGHTS ancillary data. Switches the session to the
+ *                              DMABUF payload mode on ACK.
+ * @PGIPC_MSG_DMABUF_ACK:       display -> writer: import succeeded / refused
  */
 typedef enum {
-  // writer -> display: "here's what I support"
   PGIPC_MSG_CONNECT = 1,
-  // display -> writer: "render at this mode" / reject
   PGIPC_MSG_MODE = 2,
-  // writer -> display: "let me be the writer"
   PGIPC_MSG_ACTIVATE_REQUEST = 3,
-  // display -> writer: "you're it, generation N"
   PGIPC_MSG_ACTIVATE_GRANT = 4,
-  // display -> writer: "no, and here's why"
   PGIPC_MSG_ACTIVATE_DENY = 5,
-  // writer -> display: "still alive, gen N, frame F"
   PGIPC_MSG_HEARTBEAT = 6,
-  // display -> writer: "stand down, someone else active"
   PGIPC_MSG_DEACTIVATE = 7,
-  // writer -> display: "graceful disconnect"
   PGIPC_MSG_DISCONNECT = 8,
-  // writer -> display: "my frames live in these GPU buffers". payload is
-  // pgipc_dmabuf_announce_msg_t, and exactly PGIPC_NUM_BUFFERS dmabuf fds ride
-  // alongside in SCM_RIGHTS ancillary data. Switches the session to the DMABUF payload
-  // mode on ACK.
   PGIPC_MSG_DMABUF_ANNOUNCE = 9,
-  // display -> writer: import succeeded / refused (payload: pgipc_dmabuf_ack_msg_t)
   PGIPC_MSG_DMABUF_ACK = 10,
 } pgipc_msg_type_t;
 
@@ -515,7 +554,7 @@ typedef struct {
  * pgipc_ctrl_send() - frame and send one control message
  * @fd:      connected control socket
  * @type:    message type (see pgipc_msg_type_t)
- * @payload: pointer to the message's payload struct, or NULL if @len==0
+ * @payload: pointer to the message's payload struct, or NULL if @len == 0
  * @len:     size of @payload in bytes
  *
  * Wire format: 1-byte type + 4-byte big-endian length + payload bytes. Blocks until the
@@ -551,11 +590,11 @@ PGIPC_DEF int pgipc_ctrl_recv(int fd, pgipc_msg_type_t *out_type, void *buf,
 
 /**
  * enum pgipc_payload_kind_t - what a ring slot index refers to
+ * @PGIPC_PAYLOAD_PIXELS: raw bytes in ring->frame_bufs[idx] (default)
+ * @PGIPC_PAYLOAD_DMABUF: the writer's announced dmabuf[idx]
  */
 typedef enum {
-  // raw bytes in ring->frame_bufs[idx] (default)
   PGIPC_PAYLOAD_PIXELS = 0,
-  // the writer's announced dmabuf[idx]
   PGIPC_PAYLOAD_DMABUF = 1,
 } pgipc_payload_kind_t;
 
@@ -620,7 +659,7 @@ typedef struct {
  * pgipc_ctrl_send_fds() - send a control message with attached fds
  * @fd:      connected control socket
  * @type:    message type
- * @payload: message payload, or NULL if @len==0
+ * @payload: message payload, or NULL if @len == 0
  * @len:     size of @payload in bytes
  * @fds:     file descriptors to attach via SCM_RIGHTS
  * @nfds:    number of entries in @fds (must be <= PGIPC_NUM_BUFFERS)
@@ -646,7 +685,7 @@ PGIPC_DEF int pgipc_ctrl_send_fds(int fd, pgipc_msg_type_t type, const void *pay
  * @out_fds:  caller-provided array to receive any SCM_RIGHTS fds
  * @max_fds:  capacity of @out_fds; excess fds are closed to avoid leaks
  * @out_nfds: set to the number of fds actually written to @out_fds
- *
+ * 
  * The display's control read loop should use this everywhere instead of
  * pgipc_ctrl_recv(). Receiving an fd-bearing message with the plain function silently
  * discards the fds. Messages without fds set *out_nfds = 0, so this function is always
@@ -729,8 +768,38 @@ PGIPC_DEF void pgipc_dmabuf_set_close(pgipc_dmabuf_set_t *set);
 
 #define PGIPC_RETRY_ACTIVATE_MS 2000
 
-/** pgipc_writer_cxt_t - writer session handle */
-typedef struct _pgipc_writer_ctx_t pgipc_writer_ctx_t;
+/**
+ * struct pgipc_writer_ctx_t - writer session handle
+ * @app_id:             writer application id
+ * @ctrl_fd:            fd to domain socket for control protocol
+ * @ring:               frame buffer shared memory
+ * @active:             true once granted AND not yet deactivated/evicted
+ * @running:            false once we should shut down entirely
+ * @granted_generation: current generation number granted by display
+ * @mode:               negotiated resolution/fps once accepted
+ * @fsem:               semaphore to signal the display on each publish
+ * @ctrl_thread:        background thread owning the control socket
+ * @send_lock:          serializes writes to ctrl_fd from multiple callers
+ * @payload_kind:       PGIPC_PAYLOAD_PIXELS until a dmabuf announce is ACKed
+ * @dmabuf_ack_state:   0 = pending/none, 1 = accepted, -1 = refused
+ *
+ * Opaque to callers in spirit (treat as a handle); returned by pgipc_writer_connect()
+ * and passed to every other pgipc_writer_*() call.
+ */
+typedef struct {
+  char app_id[PGIPC_APP_ID_LEN];
+  int ctrl_fd;
+  pgipc_shm_ring_t *ring;
+  PGIPC_ATOMIC bool active;
+  PGIPC_ATOMIC bool running;
+  PGIPC_ATOMIC uint32_t granted_generation;
+  pgipc_render_mode_t mode;
+  sem_t *fsem;
+  pthread_t ctrl_thread;
+  pthread_mutex_t send_lock;
+  PGIPC_ATOMIC int32_t payload_kind;
+  PGIPC_ATOMIC int32_t dmabuf_ack_state;
+} pgipc_writer_ctx_t;
 
 /**
  * pgipc_writer_connect() - establish a writer session with the display
@@ -968,7 +1037,7 @@ static int pgipc__recv_all(int fd, void *buf, size_t len) {
 #ifdef LIBPGIPC_WRITER
 
 /**
- * struct pgipc_writer_ctx_t - writer session handle implementation
+ * struct _pgipc_writer_ctx_t - writer session handle implementation
  * @app_id:             writer application id
  * @ctrl_fd:            fd to domain socket for control protocol
  * @ring:               frame buffer shared memory
@@ -1212,9 +1281,9 @@ PGIPC_DEF int pgipc_shm_ring_pick_write_slot(pgipc_shm_ring_t *ring) {
 }
 
 PGIPC_DEF void pgipc_shm_ring_publish(pgipc_shm_ring_t *ring, int idx,
-                                      uint64_t frame_id, struct timespec ts) {
+                                      uint64_t frame_id, uint64_t now_ns) {
   ring->frame_id[idx] = frame_id;
-  ring->write_ts[idx] = ts;
+  ring->write_ts_ns[idx] = now_ns;
   pgipc__ring_lock(ring);
   pgipc__astore_i32(&ring->latest_ready, idx);
   pgipc__ring_unlock(ring);
@@ -1754,8 +1823,9 @@ PGIPC_DEF void pgipc_writer_publish(pgipc_writer_ctx_t *ctx, int idx,
 
   struct timespec now;
   clock_gettime(CLOCK_MONOTONIC, &now);
+  uint64_t now_ns = ((uint64_t)now.tv_sec * 1000000000ULL) + now.tv_nsec;
 
-  pgipc_shm_ring_publish(ctx->ring, idx, frame_id, now);
+  pgipc_shm_ring_publish(ctx->ring, idx, frame_id, now_ns);
   if (ctx->fsem)
     sem_post(ctx->fsem);
 }

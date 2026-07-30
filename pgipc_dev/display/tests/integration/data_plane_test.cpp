@@ -125,7 +125,8 @@ TEST_F(DataPlaneTest, SineWaveRendersWithZeroDropsAndProducesViewableFrames) {
 
     struct timespec now;
     clock_gettime(CLOCK_MONOTONIC, &now);
-    pgipc_shm_ring_publish(ring_, slot, frame_id++, now);
+    uint64_t now_ns = ((uint64_t)now.tv_sec * 1000000000ULL) + now.tv_nsec;
+    pgipc_shm_ring_publish(ring_, slot, frame_id++, now_ns);
     sem_post(fsem_);
 
     phase += 0.15;
