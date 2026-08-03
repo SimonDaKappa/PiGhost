@@ -2,13 +2,14 @@
 // end-to-end, entirely without the control-plane.
 //
 // Plays BOTH roles itself:
-//   - the "display": creates the shm ring + semaphore (LIBPGIPC_READER
-//     symbols) and runs the real data-plane loop against a file-backed
-//     sink (fb_sink_file.c), so every frame lands as a viewable PPM.
+//   - the "display": creates the shm ring + frame-ready eventfd
+//     (LIBPGIPC_READER symbols) and runs the real data-plane loop against a
+//     file-backed sink (fb_sink_file.c), so every frame lands as a viewable
+//     PPM.
 //   - a "fake writer": bypasses the control protocol entirely and drives
 //     the shm ring's low-level writer primitives directly
 //     (pgipc_shm_ring_pick_write_slot/publish, LIBPGIPC_WRITER symbols) to
-//     push a moving sine wave, then posts the frame-ready semaphore itself
+//     push a moving sine wave, then writes to the frame-ready eventfd itself
 //     (pgipc_shm_ring_publish() does not do this on its own -- that's
 //     normally pgipc_writer_publish()'s job, but that requires a live
 //     control-socket session, which this test deliberately has none of).
@@ -29,6 +30,7 @@
 #include <string>
 #include <sys/stat.h>
 #include <time.h>
+#include <unistd.h>
 
 namespace {
 
@@ -80,21 +82,19 @@ protected:
   void SetUp() override {
     ring_ = pgipc_shm_ring_create();
     ASSERT_NE(ring_, nullptr) << "shm ring create failed -- is /dev/shm writable?";
-    fsem_ = pgipc_shm_sem_create();
-    ASSERT_NE(fsem_, nullptr);
+    frame_fd_ = pgipc_frame_fd_create();
+    ASSERT_GE(frame_fd_, 0);
   }
 
   void TearDown() override {
-    if (fsem_) {
-      sem_close(fsem_);
-      sem_unlink(PGIPC_SEM_NAME);
-    }
+    if (frame_fd_ >= 0)
+      close(frame_fd_);
     if (ring_)
       pgipc_shm_ring_destroy(ring_);
   }
 
   pgipc_shm_ring_t *ring_ = nullptr;
-  sem_t *fsem_ = nullptr;
+  int frame_fd_ = -1;
 };
 
 TEST_F(DataPlaneTest, SineWaveRendersWithZeroDropsAndProducesViewableFrames) {
@@ -106,7 +106,7 @@ TEST_F(DataPlaneTest, SineWaveRendersWithZeroDropsAndProducesViewableFrames) {
   ASSERT_EQ(pgipc_fb_sink_file_create(&sink, &sink_opts), 0);
 
   pgipc_data_plane_t dp;
-  ASSERT_EQ(pgipc_data_plane_init(&dp, ring_, fsem_, &sink, kWidth, kHeight), 0);
+  ASSERT_EQ(pgipc_data_plane_init(&dp, ring_, frame_fd_, &sink, kWidth, kHeight), 0);
 
   pthread_t dp_thread;
   ASSERT_EQ(pthread_create(&dp_thread, nullptr, pgipc_data_plane_run, &dp), 0);
@@ -127,7 +127,8 @@ TEST_F(DataPlaneTest, SineWaveRendersWithZeroDropsAndProducesViewableFrames) {
     clock_gettime(CLOCK_MONOTONIC, &now);
     uint64_t now_ns = ((uint64_t)now.tv_sec * 1000000000ULL) + now.tv_nsec;
     pgipc_shm_ring_publish(ring_, slot, frame_id++, now_ns);
-    sem_post(fsem_);
+    uint64_t v = 1;
+    write(frame_fd_, &v, sizeof(v));
 
     phase += 0.15;
     nanosleep(&frame_period, nullptr);
@@ -136,6 +137,8 @@ TEST_F(DataPlaneTest, SineWaveRendersWithZeroDropsAndProducesViewableFrames) {
   pgipc_data_plane_stop(&dp);
   pthread_join(dp_thread, nullptr);
   pgipc_fb_sink_close(&sink);
+  close(dp.abort_fd);
+  close(dp.epoll_fd);
 
   uint64_t rendered = atomic_load(&dp.stats.frames_rendered);
   uint64_t dropped = atomic_load(&dp.stats.frames_dropped);

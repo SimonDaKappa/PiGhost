@@ -57,14 +57,15 @@ protected:
   void SetUp() override {
     ring_ = pgipc_shm_ring_create();
     ASSERT_NE(ring_, nullptr);
-    sem_ = pgipc_shm_sem_create();
-    ASSERT_NE(sem_, nullptr);
+    frame_fd_ = pgipc_frame_fd_create();
+    ASSERT_GE(frame_fd_, 0);
 
     ASSERT_EQ(pgipc_control_query_channel_init(&chan_), 0);
     ASSERT_EQ(pgipc_admin_plane_init(&ap_, &chan_), 0);
 
     pgipc_render_mode_t modes[1] = {{320, 240, 60}};
-    ASSERT_EQ(pgipc_control_plane_init(&cp_, ring_, nullptr, &chan_, modes, 1), 0);
+    ASSERT_EQ(pgipc_control_plane_init(&cp_, ring_, frame_fd_, nullptr, &chan_, modes, 1),
+              0);
 
     ASSERT_EQ(pthread_create(&control_thread_, nullptr, pgipc_control_plane_run, &cp_),
               0);
@@ -82,14 +83,12 @@ protected:
 
     pgipc_control_query_channel_close(&chan_);
     pgipc_shm_ring_destroy(ring_);
-    if (sem_) {
-      sem_close(sem_);
-      sem_unlink(PGIPC_SEM_NAME);
-    }
+    if (frame_fd_ >= 0)
+      close(frame_fd_);
   }
 
   pgipc_shm_ring_t *ring_ = nullptr;
-  sem_t *sem_ = nullptr;
+  int frame_fd_ = -1;
   pgipc_control_query_channel_t chan_;
   pgipc_admin_plane_t ap_;
   pgipc_control_plane_t cp_;

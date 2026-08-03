@@ -1,7 +1,7 @@
 // reader.c - the display service's real entrypoint.
 //
 // Wires up all three threads (admin, control, data) around the shm ring +
-// frame-ready semaphore, using fb_sink_file.c as a stand-in output sink
+// frame-ready eventfd, using fb_sink_file.c as a stand-in output sink
 // until real Pi hardware (fb_sink_linuxfb.c) is available.
 #define LIBPGIPC_READER
 #include "libpgipc.h"
@@ -13,9 +13,9 @@
 #include "dataplane/fb_sink_file.h"
 
 #include <pthread.h>
-#include <semaphore.h>
 #include <signal.h>
 #include <stdio.h>
+#include <unistd.h>
 
 /* Display's advertised render modes, most-preferred first.
  * Hardcoded for now since no config-file/CLI plumbing exists yet; the first
@@ -40,9 +40,9 @@ int main(void) {
     return 1;
   }
 
-  sem_t *fsem = pgipc_shm_sem_create();
-  if (!fsem) {
-    fprintf(stderr, "[pgipc-reader] failed to create frame-ready semaphore\n");
+  int frame_fd = pgipc_frame_fd_create();
+  if (frame_fd < 0) {
+    fprintf(stderr, "[pgipc-reader] failed to create frame-ready eventfd\n");
     pgipc_shm_ring_destroy(ring);
     return 1;
   }
@@ -55,17 +55,17 @@ int main(void) {
   };
   if (pgipc_fb_sink_file_create(&sink, &sink_opts) != 0) {
     fprintf(stderr, "[pgipc-reader] failed to create file sink at %s\n", kFrameOutDir);
-    sem_close(fsem);
+    close(frame_fd);
     pgipc_shm_ring_destroy(ring);
     return 1;
   }
 
   pgipc_data_plane_t dp;
-  if (pgipc_data_plane_init(&dp, ring, fsem, &sink, kSupportedModes[0].width,
+  if (pgipc_data_plane_init(&dp, ring, frame_fd, &sink, kSupportedModes[0].width,
                             kSupportedModes[0].height) != 0) {
     fprintf(stderr, "[pgipc-reader] failed to init data plane\n");
     pgipc_fb_sink_close(&sink);
-    sem_close(fsem);
+    close(frame_fd);
     pgipc_shm_ring_destroy(ring);
     return 1;
   }
@@ -74,7 +74,7 @@ int main(void) {
   if (pgipc_control_query_channel_init(&chan) != 0) {
     fprintf(stderr, "[pgipc-reader] failed to init control-query channel\n");
     pgipc_fb_sink_close(&sink);
-    sem_close(fsem);
+    close(frame_fd);
     pgipc_shm_ring_destroy(ring);
     return 1;
   }
@@ -84,26 +84,26 @@ int main(void) {
     fprintf(stderr, "[pgipc-reader] failed to init admin plane\n");
     pgipc_control_query_channel_close(&chan);
     pgipc_fb_sink_close(&sink);
-    sem_close(fsem);
+    close(frame_fd);
     pgipc_shm_ring_destroy(ring);
     return 1;
   }
 
   pgipc_control_plane_t cp;
-  if (pgipc_control_plane_init(&cp, ring, &dp, &chan, kSupportedModes,
+  if (pgipc_control_plane_init(&cp, ring, frame_fd, &dp, &chan, kSupportedModes,
                                NUM_SUPPORTED_MODES) != 0) {
     fprintf(stderr, "[pgipc-reader] failed to init control plane\n");
     pgipc_admin_plane_close(&ap);
     pgipc_control_query_channel_close(&chan);
     pgipc_fb_sink_close(&sink);
-    sem_close(fsem);
+    close(frame_fd);
     pgipc_shm_ring_destroy(ring);
     return 1;
   }
 
   /* Block SIGINT/SIGTERM here, before spawning any threads, so every thread
    * inherits the same mask and none of their blocking syscalls (poll(),
-   * sem_wait(), accept()) get interrupted by them. The main thread alone
+   * epoll_wait(), accept()) get interrupted by them. The main thread alone
    * waits for one of these signals via sigwait(). */
   sigset_t mask;
   sigemptyset(&mask);
@@ -141,9 +141,11 @@ int main(void) {
   pgipc_data_plane_stop(&dp);
   pthread_join(data_thread, NULL);
   pgipc_fb_sink_close(&sink);
+  close(dp.abort_fd);
+  close(dp.epoll_fd);
 
   pgipc_control_query_channel_close(&chan);
-  sem_close(fsem);
+  close(frame_fd);
   pgipc_shm_ring_destroy(ring);
 
   return 0;

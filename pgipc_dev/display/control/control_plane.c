@@ -27,7 +27,7 @@
 #define PGIPC_CONTROL_POLL_TIMEOUT_MS 250
 
 int pgipc_control_plane_init(pgipc_control_plane_t *cp, pgipc_shm_ring_t *ring,
-                             pgipc_data_plane_t *dp,
+                             int frame_fd, pgipc_data_plane_t *dp,
                              pgipc_control_query_channel_t *chan,
                              const pgipc_render_mode_t *supported_modes,
                              uint32_t num_supported_modes) {
@@ -41,6 +41,7 @@ int pgipc_control_plane_init(pgipc_control_plane_t *cp, pgipc_shm_ring_t *ring,
 
   memset(cp, 0, sizeof(*cp));
   cp->ring = ring;
+  cp->frame_fd = frame_fd;
   cp->dp = dp;
   cp->chan = chan;
   cp->num_supported_modes = num_supported_modes;
@@ -138,6 +139,8 @@ static void pgipc__control_activate(pgipc_control_plane_t *cp, int idx) {
     prev_mode = cp->table.slots[prev_active].negotiated_mode;
 
   pgipc_evict_writer(cp->ring); // bumps generation
+  if (cp->dp)
+    pgipc_data_plane_kick(cp->dp);
 
   if (prev_active >= 0 && prev_active != idx) {
     pgipc_ctrl_send(cp->table.slots[prev_active].ctrl_fd, PGIPC_MSG_DEACTIVATE, NULL,
@@ -148,8 +151,8 @@ static void pgipc__control_activate(pgipc_control_plane_t *cp, int idx) {
   pgipc_session_table_activate(&cp->table, idx, generation);
 
   pgipc_grant_msg_t grant = {.generation = generation};
-  pgipc_ctrl_send(cp->table.slots[idx].ctrl_fd, PGIPC_MSG_ACTIVATE_GRANT, &grant,
-                  sizeof(grant));
+  pgipc_ctrl_send_fds(cp->table.slots[idx].ctrl_fd, PGIPC_MSG_ACTIVATE_GRANT, &grant,
+                      sizeof(grant), &cp->frame_fd, 1);
 
   pgipc_render_mode_t new_mode = cp->table.slots[idx].negotiated_mode;
   if (cp->dp && (prev_active < 0 || new_mode.width != prev_mode.width ||
@@ -248,8 +251,11 @@ static void pgipc__control_drain_admin_query(pgipc_control_plane_t *cp) {
 static void pgipc__control_handle_disconnect(pgipc_control_plane_t *cp, int idx) {
   pgipc_session_t *slot = &cp->table.slots[idx];
 
-  if (slot->state == PGIPC_SESSION_ACTIVE)
+  if (slot->state == PGIPC_SESSION_ACTIVE) {
     pgipc_evict_writer(cp->ring); // nothing to notify, fd is going away
+    if (cp->dp)
+      pgipc_data_plane_kick(cp->dp);
+  }
 
   close(slot->ctrl_fd);
   pgipc_session_table_remove(&cp->table, idx);
@@ -481,6 +487,8 @@ void *pgipc_control_plane_run(void *arg) {
       // ACTIVE -> NEGOTIATED internally; the ring-generation bump and wire
       // notification are this layer's responsibility.
       pgipc_evict_writer(cp->ring);
+      if (cp->dp)
+        pgipc_data_plane_kick(cp->dp);
       pgipc_ctrl_send(cp->table.slots[timed_out].ctrl_fd, PGIPC_MSG_DEACTIVATE, NULL,
                       0);
     }

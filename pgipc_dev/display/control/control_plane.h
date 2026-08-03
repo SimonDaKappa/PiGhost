@@ -41,9 +41,11 @@ extern "C" {
  * @table:               the session table; touched ONLY on this thread
  * @ring:                shm ring, for pgipc_evict_writer() on every activation switch;
  *                       not owned
- * @dp:                  data-plane handle, for pgipc_data_plane_set_mode() when
- *                       activation switches to a different mode; not owned, may be
- *                       NULL (e.g. in tests that don't stand up a real data plane)
+ * @frame_fd:            frame-ready eventfd shared with @dp; not owned. Sent to each 
+ *                       writer via SCM_RIGHTS on PGIPC_MSG_ACTIVATE_GRANT
+ * @dp:                  data-plane handle, for "set mode" when activation switches to 
+ *                       a different mode, and "kick" on every eviction; not owned, may 
+ *                       be NULL
  * @chan:                control-query channel shared with the admin thread; not owned,
  *                       must already be initialized
  * @supported_modes:     display-supported modes, in the order the display prefers to
@@ -61,6 +63,7 @@ typedef struct {
   int stop_write_fd;
   pgipc_session_table_t table;
   pgipc_shm_ring_t *ring;
+  int frame_fd;
   pgipc_data_plane_t *dp;
   pgipc_control_query_channel_t *chan;
   pgipc_render_mode_t supported_modes[PGIPC_MAX_MODES];
@@ -73,8 +76,10 @@ typedef struct {
  * @cp:                  control plane state to populate
  * @ring:                shm ring, created by the display via
  *                       pgipc_shm_ring_create(); must outlive @cp
- * @dp:                  data-plane handle to notify on mode switches, or NULL to skip
- *                       that notification entirely
+ * @frame_fd:            frame-ready eventfd; must outlive @cp. Both @cp and @dp are 
+ *                       peer consumers of it
+ * @dp:                  data-plane handle to notify on mode switches/evictions, or
+ *                       NULL to skip those notifications entirely
  * @chan:                control-query channel shared with the admin thread; must
  *                       already be initialized and must outlive @cp
  * @supported_modes:     display-supported modes
@@ -87,7 +92,7 @@ typedef struct {
  * @num_supported_modes == 0).
  */
 int pgipc_control_plane_init(pgipc_control_plane_t *cp, pgipc_shm_ring_t *ring,
-                             pgipc_data_plane_t *dp,
+                             int frame_fd, pgipc_data_plane_t *dp,
                              pgipc_control_query_channel_t *chan,
                              const pgipc_render_mode_t *supported_modes,
                              uint32_t num_supported_modes);
