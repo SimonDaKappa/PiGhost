@@ -40,12 +40,13 @@
 //
 //   #define LIBPGIPC_WRITER   before #include to get pgipc_writer_*,
 //                              pgipc_shm_ring_attach/pick_write_slot/publish,
-//                              pgipc_shm_sem_attach, pgipc_ctrl_send_fds, and (with
+//                              pgipc_ctrl_send_fds/recv_fds, and (with
 //                              LIBPGIPC_ENABLE_GBM) the GBM helpers.
 //
 //   #define LIBPGIPC_READER   before #include to get pgipc_shm_ring_create / destroy /
-//                              checkout/release/new_generation, pgipc_shm_sem_create,
-//                              pgipc_ctrl_recv_fds, and pgipc_dmabuf_set_* bookkeeping.
+//                              checkout/release/new_generation, pgipc_frame_fd_create,
+//                              pgipc_ctrl_send_fds/recv_fds, and pgipc_dmabuf_set_*
+//                              bookkeeping.
 //
 // The SAME two macros gate both the declaration site (above the LIBPGIPC_IMPLEMENTATION
 // block) and the implementation site (below it), so defining exactly one of them keeps
@@ -125,7 +126,8 @@
 //     pgipc_dmabuf_set_from_announce(), try to import each fd into KMS
 //     (drmPrimeFDToHandle + drmModeAddFB2WithModifiers), and reply with
 //     PGIPC_MSG_DMABUF_ACK (accepted=1) or (accepted=0, reason).
-//   * The per-frame read path is unchanged: sem_wait, checkout() -> idx,
+//   * The per-frame read path is unchanged: epoll/read-wait on the frame-ready
+//     eventfd, checkout() -> idx,
 //     but instead of memcpy'ing ring->frame_bufs[idx], page-flip to the KMS
 //     framebuffer imported from that writer's dmabuf[idx].
 //   * reader_locked semantics: a scanout buffer is "in use" until the flip
@@ -169,10 +171,10 @@
 #endif
 
 #include <pthread.h>
-#include <semaphore.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <sys/eventfd.h>
 #include <time.h>
 
 #if defined(LIBPGIPC_ENABLE_GBM) && defined(LIBPGIPC_WRITER)
@@ -212,7 +214,7 @@ extern "C" {
     unsigned char PGIPC_CAT(pad_, __LINE__)[PGIPC_CACHELINE];                          \
   }
 
-/** Marker for what should be a atomic_*|_Atomic type but isn't for cross-language ABI
+/** Marker for what should be a `atomic_*|_Atomic` type but isn't for cross-language ABI
  * stability and reinterpretation.
  *
  * Plain, fixed-width, non "_Atomic/atomic_*" types. Accessed only through
@@ -277,7 +279,6 @@ static inline uint64_t pgipc__ts_diff_ns(struct timespec a, struct timespec b) {
 // ===========================================================================
 
 #define PGIPC_SHM_NAME "/frame_ring_shm"
-#define PGIPC_SEM_NAME "/frame_ring_sem"
 
 #define PGIPC_NUM_BUFFERS 3
 #define PGIPC_BYTES_PER_PIXEL 4
@@ -353,13 +354,17 @@ PGIPC_DEF pgipc_shm_ring_t *pgipc_shm_ring_create(void);
 PGIPC_DEF void pgipc_shm_ring_destroy(pgipc_shm_ring_t *ring);
 
 /**
- * pgipc_shm_sem_create() - create the cross-process frame-ready semaphore
+ * pgipc_frame_fd_create() - create the frame-ready eventfd
  *
- * Unlinks any stale semaphore first, then creates a fresh one with initial value 0.
+ * Created EFD_NONBLOCK | EFD_CLOEXEC, default (non-EFD_SEMAPHORE) counting mode. Only
+ * one writer is ever ACTIVE at a time, so a single eventfd is created once here and
+ * reused across every activation grant: the display sends a copy of it as SCM_RIGHTS
+ * ancillary data on every PGIPC_MSG_ACTIVATE_GRANT (see pgipc_ctrl_send_fds()), and the
+ * writer writes a 1 to it on every publish (see pgipc_writer_publish()).
  *
- * Return: semaphore handle, or NULL on error.
+ * Return: the created eventfd, or -1 on error.
  */
-PGIPC_DEF sem_t *pgipc_shm_sem_create(void);
+PGIPC_DEF int pgipc_frame_fd_create(void);
 
 /**
  * pgipc_shm_ring_checkout() - claim the newest ready frame for reading
@@ -408,15 +413,6 @@ PGIPC_DEF void pgipc_evict_writer(pgipc_shm_ring_t *ring);
  * Return: pointer to the mapped ring, or NULL if it never appeared.
  */
 PGIPC_DEF pgipc_shm_ring_t *pgipc_shm_ring_attach(int max_retries, int retry_delay_ms);
-
-/**
- * pgipc_shm_sem_attach() - attach to the existing frame-ready semaphore
- * @max_retries:    number of attempts before giving up
- * @retry_delay_ms: delay between attempts, in milliseconds
- *
- * Return: semaphore handle, or NULL if it never appeared.
- */
-PGIPC_DEF sem_t *pgipc_shm_sem_attach(int max_retries, int retry_delay_ms);
 
 /**
  * pgipc_shm_ring_pick_write_slot() - choose a free buffer index to write
@@ -654,7 +650,7 @@ typedef struct {
   char reason[PGIPC_DENY_REASON_LEN];
 } pgipc_dmabuf_ack_msg_t;
 
-#ifdef LIBPGIPC_WRITER
+#if defined(LIBPGIPC_WRITER) || defined(LIBPGIPC_READER)
 /**
  * pgipc_ctrl_send_fds() - send a control message with attached fds
  * @fd:      connected control socket
@@ -665,16 +661,17 @@ typedef struct {
  * @nfds:    number of entries in @fds (must be <= PGIPC_NUM_BUFFERS)
  *
  * Same wire format as pgipc_ctrl_send(); the fds ride as SCM_RIGHTS ancillary data
- * attached to the framing header. writer-only: today the only fd-bearing message a
- * writer sends is PGIPC_MSG_DMABUF_ANNOUNCE.
+ * attached to the framing header. Used in both directions: writers send fds on
+ * PGIPC_MSG_DMABUF_ANNOUNCE, the display sends the frame-ready eventfd on
+ * PGIPC_MSG_ACTIVATE_GRANT.
  *
  * Return: 0 on success, -1 on error (including @nfds out of range).
  */
 PGIPC_DEF int pgipc_ctrl_send_fds(int fd, pgipc_msg_type_t type, const void *payload,
                                   uint32_t len, const int *fds, int nfds);
-#endif /* LIBPGIPC_WRITER */
+#endif /* LIBPGIPC_WRITER || LIBPGIPC_READER */
 
-#ifdef LIBPGIPC_READER
+#if defined(LIBPGIPC_WRITER) || defined(LIBPGIPC_READER)
 /**
  * pgipc_ctrl_recv_fds() - receive a control message, harvesting any fds
  * @fd:       connected control socket
@@ -686,10 +683,10 @@ PGIPC_DEF int pgipc_ctrl_send_fds(int fd, pgipc_msg_type_t type, const void *pay
  * @max_fds:  capacity of @out_fds; excess fds are closed to avoid leaks
  * @out_nfds: set to the number of fds actually written to @out_fds
  * 
- * The display's control read loop should use this everywhere instead of
- * pgipc_ctrl_recv(). Receiving an fd-bearing message with the plain function silently
- * discards the fds. Messages without fds set *out_nfds = 0, so this function is always
- * safe to use in place of pgipc_ctrl_recv() on the reader side.
+ * Both the display's and the writer's control read loops should use this everywhere
+ * instead of pgipc_ctrl_recv(). Receiving an fd-bearing message with the plain function
+ * silently discards the fds. Messages without fds set *out_nfds = 0, so this function
+ * is always safe to use in place of pgipc_ctrl_recv().
  *
  * Return: 0 on success, -1 on error/disconnect, -2 if the message is larger than
  * @bufsize (any harvested fds are closed first).
@@ -697,7 +694,9 @@ PGIPC_DEF int pgipc_ctrl_send_fds(int fd, pgipc_msg_type_t type, const void *pay
 PGIPC_DEF int pgipc_ctrl_recv_fds(int fd, pgipc_msg_type_t *out_type, void *buf,
                                   uint32_t bufsize, uint32_t *out_len, int *out_fds,
                                   int max_fds, int *out_nfds);
+#endif /* LIBPGIPC_WRITER || LIBPGIPC_READER */
 
+#ifdef LIBPGIPC_READER
 /**
  * struct pgipc_dmabuf_set_t - display's record of one writer's dmabufs
  * @valid: true once populated from a well-formed announce
@@ -768,38 +767,12 @@ PGIPC_DEF void pgipc_dmabuf_set_close(pgipc_dmabuf_set_t *set);
 
 #define PGIPC_RETRY_ACTIVATE_MS 2000
 
-/**
- * struct pgipc_writer_ctx_t - writer session handle
- * @app_id:             writer application id
- * @ctrl_fd:            fd to domain socket for control protocol
- * @ring:               frame buffer shared memory
- * @active:             true once granted AND not yet deactivated/evicted
- * @running:            false once we should shut down entirely
- * @granted_generation: current generation number granted by display
- * @mode:               negotiated resolution/fps once accepted
- * @fsem:               semaphore to signal the display on each publish
- * @ctrl_thread:        background thread owning the control socket
- * @send_lock:          serializes writes to ctrl_fd from multiple callers
- * @payload_kind:       PGIPC_PAYLOAD_PIXELS until a dmabuf announce is ACKed
- * @dmabuf_ack_state:   0 = pending/none, 1 = accepted, -1 = refused
+/** pgipc_writer_ctx_t - writer session handle
  *
- * Opaque to callers in spirit (treat as a handle); returned by pgipc_writer_connect()
- * and passed to every other pgipc_writer_*() call.
+ * Opaque; treat as a handle. Returned by pgipc_writer_connect() and passed to every
+ * other pgipc_writer_*() call.
  */
-typedef struct {
-  char app_id[PGIPC_APP_ID_LEN];
-  int ctrl_fd;
-  pgipc_shm_ring_t *ring;
-  PGIPC_ATOMIC bool active;
-  PGIPC_ATOMIC bool running;
-  PGIPC_ATOMIC uint32_t granted_generation;
-  pgipc_render_mode_t mode;
-  sem_t *fsem;
-  pthread_t ctrl_thread;
-  pthread_mutex_t send_lock;
-  PGIPC_ATOMIC int32_t payload_kind;
-  PGIPC_ATOMIC int32_t dmabuf_ack_state;
-} pgipc_writer_ctx_t;
+typedef struct _pgipc_writer_ctx_t pgipc_writer_ctx_t;
 
 /**
  * pgipc_writer_connect() - establish a writer session with the display
@@ -1045,7 +1018,8 @@ static int pgipc__recv_all(int fd, void *buf, size_t len) {
  * @running:            false once we should shut down entirely
  * @granted_generation: current generation number granted by display
  * @mode:               negotiated resolution/fps once accepted
- * @fsem:               semaphore to signal the display on each publish
+ * @frame_fd:            eventfd to signal the display on each publish; received via
+ *                       SCM_RIGHTS on PGIPC_MSG_ACTIVATE_GRANT, -1 until granted
  * @ctrl_thread:        background thread owning the control socket
  * @send_lock:          serializes writes to ctrl_fd from multiple callers
  * @payload_kind:       PGIPC_PAYLOAD_PIXELS until a dmabuf announce is ACKed
@@ -1062,7 +1036,7 @@ struct _pgipc_writer_ctx_t {
   PGIPC_ATOMIC bool running;
   PGIPC_ATOMIC uint32_t granted_generation;
   pgipc_render_mode_t mode;
-  sem_t *fsem;
+  int frame_fd;
   pthread_t ctrl_thread;
   pthread_mutex_t send_lock;
   PGIPC_ATOMIC int32_t payload_kind;
@@ -1071,27 +1045,35 @@ struct _pgipc_writer_ctx_t {
 
 /** pgipc__writer_handle_grant() - shared grant-processing path used by both
  * the synchronous connect()-time handshake and the async ctrl thread.
- * @ctx:   session handle
- * @grant: grant for session
+ * @ctx:       session handle
+ * @grant:     grant for session
+ * @frame_fd:  frame-ready eventfd received via SCM_RIGHTS alongside @grant, or -1 if
+ *             none arrived (treated as a malformed grant)
  *
- * Attaches shm/sem BEFORE flipping @ctx->active so no caller can observe active==true
- * with a NULL ring/sem (see note on pgipc_writer_is_active()).
+ * Attaches the shm ring and adopts @frame_fd BEFORE flipping @ctx->active so no caller
+ * can observe active==true with a NULL ring / invalid frame_fd (see note on
+ * pgipc_writer_is_active()). Closes any previously-held frame_fd first, since a
+ * re-grant (e.g. after being deactivated and reactivated) carries a fresh fd.
  *
- * Returns 0 on success, -1 if shm/sem attachment failed (caller should treat the
- * session as unusable).
+ * Returns 0 on success, -1 if shm attachment failed or @frame_fd < 0 (caller should
+ * treat the session as unusable).
  */
 static int pgipc__writer_handle_grant(pgipc_writer_ctx_t *ctx,
-                                      const pgipc_grant_msg_t *grant) {
+                                      const pgipc_grant_msg_t *grant, int frame_fd) {
   if (!ctx->ring)
     ctx->ring = pgipc_shm_ring_attach(50, 100);
-  if (!ctx->fsem)
-    ctx->fsem = pgipc_shm_sem_attach(50, 100);
 
-  if (!ctx->ring || !ctx->fsem) {
-    fprintf(stderr, "[pgipc:%s] could not attach to shm ring or semaphore\n",
+  if (!ctx->ring || frame_fd < 0) {
+    fprintf(stderr, "[pgipc:%s] could not attach to shm ring or frame-ready eventfd\n",
             ctx->app_id);
+    if (frame_fd >= 0)
+      close(frame_fd);
     return -1;
   }
+
+  if (ctx->frame_fd >= 0)
+    close(ctx->frame_fd);
+  ctx->frame_fd = frame_fd;
 
   pgipc__astore_u32(&ctx->granted_generation, grant->generation);
   pgipc__astore_bool(&ctx->active, true);
@@ -1178,16 +1160,11 @@ PGIPC_DEF void pgipc_shm_ring_destroy(pgipc_shm_ring_t *ring) {
   shm_unlink(PGIPC_SHM_NAME);
 }
 
-PGIPC_DEF sem_t *pgipc_shm_sem_create(void) {
-  sem_unlink(PGIPC_SEM_NAME);
-
-  sem_t *s = sem_open(PGIPC_SEM_NAME, O_CREAT | O_EXCL, 0666, 0);
-  if (s == SEM_FAILED) {
-    perror("sem_open (create)");
-    return NULL;
-  }
-
-  return s;
+PGIPC_DEF int pgipc_frame_fd_create(void) {
+  int fd = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
+  if (fd < 0)
+    perror("eventfd (frame_fd create)");
+  return fd;
 }
 
 PGIPC_DEF int pgipc_shm_ring_checkout(pgipc_shm_ring_t *ring) {
@@ -1241,26 +1218,6 @@ PGIPC_DEF pgipc_shm_ring_t *pgipc_shm_ring_attach(int max_retries, int retry_del
     return NULL;
   }
   return ring;
-}
-
-PGIPC_DEF sem_t *pgipc_shm_sem_attach(int max_retries, int retry_delay_ms) {
-  sem_t *s = SEM_FAILED;
-
-  for (int i = 0; i < max_retries; i++) {
-    s = sem_open(PGIPC_SEM_NAME, 0);
-    if (s != SEM_FAILED)
-      break;
-    struct timespec ts = {.tv_sec = retry_delay_ms / 1000,
-                          .tv_nsec = (retry_delay_ms % 1000) * 1000000L};
-    nanosleep(&ts, NULL);
-  }
-
-  if (s == SEM_FAILED) {
-    fprintf(stderr, "[pgipc] gave up waiting for semaphore %s\n", PGIPC_SEM_NAME);
-    return NULL;
-  }
-
-  return s;
 }
 
 PGIPC_DEF int pgipc_shm_ring_pick_write_slot(pgipc_shm_ring_t *ring) {
@@ -1337,7 +1294,7 @@ PGIPC_DEF int pgipc_ctrl_recv(int fd, pgipc_msg_type_t *out_type, void *buf,
 // fd-carrying framing (SCM_RIGHTS)
 // ---------------------------------------------------------------------------
 
-#ifdef LIBPGIPC_WRITER
+#if defined(LIBPGIPC_WRITER) || defined(LIBPGIPC_READER)
 
 PGIPC_DEF int pgipc_ctrl_send_fds(int fd, pgipc_msg_type_t type, const void *payload,
                                   uint32_t len, const int *fds, int nfds) {
@@ -1390,13 +1347,13 @@ PGIPC_DEF int pgipc_ctrl_send_fds(int fd, pgipc_msg_type_t type, const void *pay
 
   return 0;
 }
-#endif /* LIBPGIPC_WRITER */
+#endif /* LIBPGIPC_WRITER || LIBPGIPC_READER */
 
-#ifdef LIBPGIPC_READER
+#if defined(LIBPGIPC_WRITER) || defined(LIBPGIPC_READER)
 /** pgipc__close_fds() - close every valid (>=0) fd in @fds[0..nfds).
  *
- * Used by the reader-side fd-receiving/bookkeeping paths to avoid leaking fds on error
- * or after a dmabuf set is retired.
+ * Used by fd-receiving/bookkeeping paths to avoid leaking fds on error or after a
+ * dmabuf set is retired.
  */
 static void pgipc__close_fds(int *fds, int nfds) {
   for (int i = 0; i < nfds; i++)
@@ -1474,7 +1431,7 @@ fail:
   *out_nfds = 0;
   return -1;
 }
-#endif /* LIBPGIPC_READER */
+#endif /* LIBPGIPC_WRITER || LIBPGIPC_READER */
 
 // ---------------------------------------------------------------------------
 // display-side dmabuf bookkeeping
@@ -1582,8 +1539,11 @@ static void *pgipc__writer_ctrl(void *arg) {
     pgipc_msg_type_t type;
     unsigned char buf[256];
     uint32_t len;
+    int fds[1];
+    int nfds = 0;
 
-    int rc = pgipc_ctrl_recv(ctx->ctrl_fd, &type, buf, sizeof(buf), &len);
+    int rc = pgipc_ctrl_recv_fds(ctx->ctrl_fd, &type, buf, sizeof(buf), &len, fds,
+                                 1, &nfds);
     if (rc == -1)
       continue; /* timeout or disconnect */
     if (rc == -2)
@@ -1594,10 +1554,10 @@ static void *pgipc__writer_ctrl(void *arg) {
       pgipc_grant_msg_t grant;
 
       memcpy(&grant, buf, sizeof(grant));
-      /* Shared helper attaches shm/sem BEFORE setting active=true, so a
-       * concurrent pgipc_writer_is_active() can never observe active
-       * with a NULL ring/sem (see the fixed ordering bug this replaces). */
-      pgipc__writer_handle_grant(ctx, &grant);
+      /* Shared helper attaches the shm ring and adopts the received frame-ready
+       * eventfd BEFORE setting active=true, so a concurrent pgipc_writer_is_active()
+       * can never observe active with a NULL ring / invalid frame_fd. */
+      pgipc__writer_handle_grant(ctx, &grant, nfds > 0 ? fds[0] : -1);
       break;
     }
     case PGIPC_MSG_ACTIVATE_DENY: {
@@ -1655,6 +1615,7 @@ PGIPC_DEF pgipc_writer_ctx_t *pgipc_writer_connect(const char *app_id,
   pgipc__astore_bool(&ctx->active, false);
   pgipc__astore_i32(&ctx->payload_kind, PGIPC_PAYLOAD_PIXELS);
   pgipc__astore_i32(&ctx->dmabuf_ack_state, 0);
+  ctx->frame_fd = -1;
 
   int fd = -1;
   for (int i = 0; i < 100; i++) {
@@ -1723,7 +1684,11 @@ PGIPC_DEF pgipc_writer_ctx_t *pgipc_writer_connect(const char *app_id,
   /* Send the first request here so the ctrl thread starts in a known state. */
   pgipc_ctrl_send(ctx->ctrl_fd, PGIPC_MSG_ACTIVATE_REQUEST, NULL, 0);
 
-  if (pgipc_ctrl_recv(ctx->ctrl_fd, &type, buf, sizeof(buf), &len) == 0) {
+  int grant_fds[1];
+  int grant_nfds = 0;
+
+  if (pgipc_ctrl_recv_fds(ctx->ctrl_fd, &type, buf, sizeof(buf), &len, grant_fds, 1,
+                          &grant_nfds) == 0) {
     if (type == PGIPC_MSG_ACTIVATE_GRANT) {
       pgipc_grant_msg_t grant;
 
@@ -1731,7 +1696,8 @@ PGIPC_DEF pgipc_writer_ctx_t *pgipc_writer_connect(const char *app_id,
 
       /* Same helper the ctrl thread uses for later grants -- keeps the
        * attach-before-active ordering in exactly one place. */
-      if (pgipc__writer_handle_grant(ctx, &grant) != 0) {
+      if (pgipc__writer_handle_grant(ctx, &grant,
+                                     grant_nfds > 0 ? grant_fds[0] : -1) != 0) {
         close(fd);
         pthread_mutex_destroy(&ctx->send_lock);
         free(ctx);
@@ -1826,8 +1792,13 @@ PGIPC_DEF void pgipc_writer_publish(pgipc_writer_ctx_t *ctx, int idx,
   uint64_t now_ns = ((uint64_t)now.tv_sec * 1000000000ULL) + now.tv_nsec;
 
   pgipc_shm_ring_publish(ctx->ring, idx, frame_id, now_ns);
-  if (ctx->fsem)
-    sem_post(ctx->fsem);
+  if (ctx->frame_fd >= 0) {
+    uint64_t v = 1;
+    ssize_t n;
+    do {
+      n = write(ctx->frame_fd, &v, sizeof(v));
+    } while (n < 0 && errno == EINTR);
+  }
 }
 
 PGIPC_DEF void pgipc_writer_disconnect(pgipc_writer_ctx_t *ctx) {
@@ -1839,6 +1810,8 @@ PGIPC_DEF void pgipc_writer_disconnect(pgipc_writer_ctx_t *ctx) {
 
   if (ctx->ring)
     munmap(ctx->ring, sizeof(pgipc_shm_ring_t));
+  if (ctx->frame_fd >= 0)
+    close(ctx->frame_fd);
 
   pthread_mutex_destroy(&ctx->send_lock);
   free(ctx);

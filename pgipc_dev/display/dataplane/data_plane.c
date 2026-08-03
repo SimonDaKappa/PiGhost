@@ -4,12 +4,15 @@
 
 #include <errno.h>
 #include <stdio.h>
+#include <sys/epoll.h>
+#include <sys/eventfd.h>
 #include <time.h>
+#include <unistd.h>
 
-int pgipc_data_plane_init(pgipc_data_plane_t *dp, pgipc_shm_ring_t *ring, sem_t *fsem,
+int pgipc_data_plane_init(pgipc_data_plane_t *dp, pgipc_shm_ring_t *ring, int frame_fd,
                           pgipc_fb_sink_t *sink, uint32_t width, uint32_t height) {
   dp->ring = ring;
-  dp->fsem = fsem;
+  dp->frame_fd = frame_fd;
   dp->sink = sink;
   dp->width = width;
   dp->height = height;
@@ -23,6 +26,29 @@ int pgipc_data_plane_init(pgipc_data_plane_t *dp, pgipc_shm_ring_t *ring, sem_t 
     fprintf(stderr, "[data_plane] sink open failed at %ux%u\n", width, height);
     return -1;
   }
+
+  dp->abort_fd = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
+  if (dp->abort_fd < 0) {
+    perror("[data_plane] eventfd (abort_fd)");
+    return -1;
+  }
+
+  dp->epoll_fd = epoll_create1(EPOLL_CLOEXEC);
+  if (dp->epoll_fd < 0) {
+    perror("[data_plane] epoll_create1");
+    close(dp->abort_fd);
+    return -1;
+  }
+
+  struct epoll_event ev;
+  ev.events = EPOLLIN;
+  ev.data.fd = dp->frame_fd;
+  epoll_ctl(dp->epoll_fd, EPOLL_CTL_ADD, dp->frame_fd, &ev);
+
+  ev.events = EPOLLIN;
+  ev.data.fd = dp->abort_fd;
+  epoll_ctl(dp->epoll_fd, EPOLL_CTL_ADD, dp->abort_fd, &ev);
+
   return 0;
 }
 
@@ -40,14 +66,35 @@ void *pgipc_data_plane_run(void *arg) {
   pgipc_data_plane_t *dp = (pgipc_data_plane_t *)arg;
 
   while (atomic_load(&dp->running)) {
-    if (sem_wait(dp->fsem) != 0) {
+    struct epoll_event events[2];
+    int nfds = epoll_wait(dp->epoll_fd, events, 2, -1);
+    if (nfds < 0) {
       if (errno == EINTR)
         continue;
-      break; /* semaphore destroyed out from under us; nothing to recover */
+      break; /* epoll instance destroyed out from under us; nothing to recover */
     }
 
     if (!atomic_load(&dp->running))
       break;
+
+    bool have_frame_signal = false;
+    for (int i = 0; i < nfds; i++) {
+      uint64_t counter;
+      if (events[i].data.fd == dp->frame_fd) {
+        /* read() clears (coalesces) the counter; N pending publishes since our
+         * last wake collapse into a single "check the ring" pass, which is
+         * correct since the ring only tracks the single latest-ready frame. */
+        while (read(dp->frame_fd, &counter, sizeof(counter)) > 0) {}
+        have_frame_signal = true;
+      } 
+      else if (events[i].data.fd == dp->abort_fd) {
+        /* Kick: drain and fall through to re-check checkout() / running. */
+        while (read(dp->abort_fd, &counter, sizeof(counter)) > 0) {}
+      }
+    }
+
+    if (!have_frame_signal)
+      continue; /* woken only by a kick; nothing new to render yet */
 
     int idx = pgipc_shm_ring_checkout(dp->ring);
     if (idx < 0) {
@@ -88,7 +135,15 @@ void *pgipc_data_plane_run(void *arg) {
   return NULL;
 }
 
+void pgipc_data_plane_kick(pgipc_data_plane_t *dp) {
+  uint64_t v = 1;
+  ssize_t n;
+  do {
+    n = write(dp->abort_fd, &v, sizeof(v));
+  } while (n < 0 && errno == EINTR);
+}
+
 void pgipc_data_plane_stop(pgipc_data_plane_t *dp) {
   atomic_store(&dp->running, false);
-  sem_post(dp->fsem); /* unblock a sem_wait() the loop may be parked in */
+  pgipc_data_plane_kick(dp); /* unblock an epoll_wait() the loop may be parked in */
 }
