@@ -8,7 +8,7 @@ add_compile_options(-Wall -Wextra)
 add_compile_definitions(_POSIX_C_SOURCE=200809L)
 
 add_executable(sine_wave_cpu main.c)
-target_include_directories(sine_wave_cpu PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../libpgipc)
+target_include_directories(sine_wave_cpu PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../libpgdp)
 
 find_package(Threads REQUIRED)
 target_link_libraries(sine_wave_cpu PRIVATE Threads::Threads m rt)

@@ -2,18 +2,18 @@
 //
 // Draws a single animated sine wave curve scrolling left-to-right across
 // the negotiated frame, entirely in software (no GPU/GBM involved), and
-// publishes it into the display's shm ring on every tick at the
-// negotiated fps. This is the simplest possible libpgipc producer:
+// publishes it into the server's shm ring on every tick at the
+// negotiated fps. This is the simplest possible libpgdp producer:
 // establish a session, loop forever, write pixels, publish, repeat.
 // Everything else (mode negotiation, activation/eviction, reconnect
-// handling) is handled by libpgipc.h itself.
+// handling) is handled by libpgdp.h itself.
 //
-// Run alongside pgipc_reader (see pgipc_dev/display/) and watch
+// Run alongside pgdp_server (see pg_display/server/) and watch
 // <frames-dir>/latest.ppm with an auto-reloading image viewer to see it
 // live. See README.md in this directory for full testing instructions.
-#define LIBPGIPC_IMPLEMENTATION
-#define LIBPGIPC_WRITER
-#include "libpgipc.h"
+#define LIBPGDP_IMPLEMENTATION
+#define LIBPGDP_CLIENT
+#include "libpgdp.h"
 
 #include <math.h>
 #include <signal.h>
@@ -36,6 +36,7 @@ static void handle_signal(int sig) {
 
 /**
  * render_sine_frame() - fill one XRGB8888 frame with a scrolling sine curve
+ * 
  * @pixels: destination buffer, @height rows of @width pixels, tightly
  *          packed, byte order [B, G, R, X] per pixel (DRM XR24 in memory)
  * @width:  frame width in pixels
@@ -83,11 +84,11 @@ static void render_sine_frame(unsigned char *pixels, uint32_t width, uint32_t he
 }
 
 int main(void) {
-  /* Offer the same mode list the reference display advertises
-   * (pgipc_dev/display/reader.c), most-preferred first. Any producer app
-   * can offer a different/smaller list; the display picks the first
+  /* Offer the same mode list the reference server advertises
+   * (pg_display/server/reader.c), most-preferred first. Any producer app
+   * can offer a different/smaller list; the server picks the first
    * mutual match (SPEC.md §5). */
-  const pgipc_render_mode_t offered_modes[] = {
+  const pgdp_render_mode_t offered_modes[] = {
       {320, 240, 60},
       {640, 480, 60},
       {1280, 720, 30},
@@ -101,15 +102,15 @@ int main(void) {
    * start failing, which is harmless here.) */
   signal(SIGPIPE, SIG_IGN);
 
-  printf("[sine_wave_cpu] connecting to display...\n");
-  pgipc_writer_ctx_t *ctx =
-      pgipc_writer_connect("sine_wave_cpu", offered_modes, num_offered);
+  printf("[sine_wave_cpu] connecting to server...\n");
+  pgdpc_ctx_t *ctx =
+      pgdpc_connect("sine_wave_cpu", offered_modes, num_offered);
   if (!ctx) {
-    fprintf(stderr, "[sine_wave_cpu] failed to connect. is pgipc_reader running?\n");
+    fprintf(stderr, "[sine_wave_cpu] failed to connect. is pgdp_server running?\n");
     return 1;
   }
 
-  pgipc_render_mode_t mode = pgipc_writer_negotiated_mode(ctx);
+  pgdp_render_mode_t mode = pgdpc_negotiated_mode(ctx);
   double frame_interval_s = mode.fps > 0 ? 1.0 / (double)mode.fps : 1.0 / 60.0;
   printf("[sine_wave_cpu] negotiated %ux%u@%ufps, frame interval=%.3fms\n", mode.width,
          mode.height, mode.fps, frame_interval_s * 1000.0);
@@ -128,9 +129,9 @@ int main(void) {
     struct timespec tick_start;
     clock_gettime(CLOCK_MONOTONIC, &tick_start);
 
-    bool active = pgipc_writer_is_active(ctx);
+    bool active = pgdpc_is_active(ctx);
     if (active != was_active) {
-      printf("[sine_wave_cpu] %s\n", active ? "ACTIVATED: now driving the display"
+      printf("[sine_wave_cpu] %s\n", active ? "ACTIVATED: now driving the server"
                                             : "DEACTIVATED: paused, holding session");
       was_active = active;
     }
@@ -140,13 +141,13 @@ int main(void) {
        * a different negotiated size than our first activation); re-read
        * it every tick since it's cheap and this is the source of truth
        * for the buffer size we're about to write. */
-      mode = pgipc_writer_negotiated_mode(ctx);
+      mode = pgdpc_negotiated_mode(ctx);
       frame_interval_s = mode.fps > 0 ? 1.0 / (double)mode.fps : 1.0 / 60.0;
 
-      int idx = pgipc_writer_write_slot(ctx);
+      int idx = pgdpc_write_slot(ctx);
       if (idx >= 0) {
         render_sine_frame(ctx->ring->frame_bufs[idx], mode.width, mode.height, phase);
-        pgipc_writer_publish(ctx, idx, frame_id++);
+        pgdpc_publish(ctx, idx, frame_id++);
         frames_published++;
         phase += phase_speed * frame_interval_s;
         if (phase > 2.0 * M_PI)
@@ -187,6 +188,6 @@ int main(void) {
   printf("[sine_wave_cpu] shutting down (published=%llu, skipped=%llu)\n",
          (unsigned long long)frames_published,
          (unsigned long long)frames_skipped_inactive);
-  pgipc_writer_disconnect(ctx);
+  pgdpc_disconnect(ctx);
   return 0;
 }
