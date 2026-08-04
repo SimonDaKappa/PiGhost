@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(pgdp_display C CXX)
+project(pgdp_server C CXX)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -42,7 +42,7 @@ endif()
 # (reader.c) and the libpgdp.h implementation TU, which are kept separate
 # so tests can link the exact same modules reader.c will eventually use.
 # ---------------------------------------------------------------------------
-add_library(pgdp_display_core STATIC
+add_library(pgdp_server_core STATIC
   pgdp_impl.c
   session/session_table.c
   dataplane/data_plane.c
@@ -51,18 +51,18 @@ add_library(pgdp_display_core STATIC
   control/control_plane.c
   admin/admin_plane.c
 )
-target_include_directories(pgdp_display_core PUBLIC
+target_include_directories(pgdp_server_core PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}
   ${CMAKE_CURRENT_SOURCE_DIR}/../libpgdp
 )
 find_package(Threads REQUIRED)
-target_link_libraries(pgdp_display_core PUBLIC Threads::Threads m)
+target_link_libraries(pgdp_server_core PUBLIC Threads::Threads m)
 
 # ---------------------------------------------------------------------------
 # The real server binary
 # ---------------------------------------------------------------------------
-add_executable(pgdp_server reader.c)
-target_link_libraries(pgdp_server PRIVATE pgdp_display_core)
+add_executable(server server.c)
+target_link_libraries(server PRIVATE pgdp_server_core)
 
 # ---------------------------------------------------------------------------
 # Tests

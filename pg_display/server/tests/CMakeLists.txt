@@ -19,14 +19,14 @@ include(GoogleTest)
 add_executable(pgdp_unit_tests
   unit/session_table_test.cpp
 )
-target_link_libraries(pgdp_unit_tests PRIVATE pgdp_display_core gtest_main)
+target_link_libraries(pgdp_unit_tests PRIVATE pgdp_server_core gtest_main)
 gtest_discover_tests(pgdp_unit_tests)
 
 # ---------------------------------------------------------------------------
-# Integration tests: real threads, real POSIX shm/semaphores/sockets. Each
-# test binds fixed, well-known resource names (PGDP_SEM_NAME, the shm ring
-# segment, PGDPS_ADMIN_SOCK_PATH), so tests within and especially across
-# these binaries must never run concurrently with each other. RUN_SERIAL 
+# Integration tests: real threads, real POSIX shm/eventfds/sockets. Each
+# test binds fixed, well-known resource names (the shm ring segment,
+# PGDPS_ADMIN_SOCK_PATH), so tests within and especially across these
+# binaries must never run concurrently with each other. RUN_SERIAL
 # enforces that under ctest.
 #
 # This is also the primary target for sanitizer builds
@@ -39,7 +39,7 @@ add_executable(pgdp_integration_tests
   integration/admin_plane_test.cpp
   integration/control_plane_test.cpp
 )
-target_link_libraries(pgdp_integration_tests PRIVATE pgdp_display_core gtest_main)
+target_link_libraries(pgdp_integration_tests PRIVATE pgdp_server_core gtest_main)
 gtest_discover_tests(pgdp_integration_tests
   TEST_PREFIX "integration."
   PROPERTIES RUN_SERIAL TRUE
