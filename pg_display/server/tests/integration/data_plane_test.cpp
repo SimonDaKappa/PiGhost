@@ -119,6 +119,9 @@ TEST_F(DataPlaneTest, SineWaveRendersWithZeroDropsAndProducesViewableFrames) {
 
   struct _pgdpc_ctx_t fake_ctx = {};
   fake_ctx.ring = ring_;
+  pgdp_atomic_store(&fake_ctx.active, true);
+  pgdp_atomic_store(&fake_ctx.granted_generation, 1);
+  pgdp_atomic_store(&fake_ctx.ring->generation, 1);
 
   for (int i = 0; i < total_frames; i++) {
     // fake client side: identical shape to what pgdpc_publish() does
@@ -129,8 +132,9 @@ TEST_F(DataPlaneTest, SineWaveRendersWithZeroDropsAndProducesViewableFrames) {
 
     struct timespec now;
     clock_gettime(CLOCK_MONOTONIC, &now);
-    uint64_t now_ns = ((uint64_t)now.tv_sec * 1000000000ULL) + now.tv_nsec;
-    pgdpc__shm_ring_publish(fake_ctx.ring, slot, frame_id++, now_ns);
+    // uint64_t now_ns = ((uint64_t)now.tv_sec * 1000000000ULL) + now.tv_nsec;
+    // pgdpc__shm_ring_publish(fake_ctx.ring, slot, frame_id++, now_ns);
+    pgdpc_publish(&fake_ctx, slot, frame_id++);
     uint64_t v = 1;
     write(frame_fd_, &v, sizeof(v));
 

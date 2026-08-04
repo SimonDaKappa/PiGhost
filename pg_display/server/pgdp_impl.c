@@ -3,7 +3,7 @@
 //
 // Deliberately defines NEITHER LIBPGDP_SERVER nor LIBPGDP_CLIENT, so
 // BOTH sides' function bodies get compiled in (the header's documented
-// "both" default) -- other server-side .c files only need reader-side
+// "both" default) -- other server-side .c files only need server-side
 // declarations, but test_data_plane.c's fake-client role needs client-side
 // bodies to link against too. See test_data_plane.c's file comment.
 #define LIBPGDP_IMPLEMENTATION

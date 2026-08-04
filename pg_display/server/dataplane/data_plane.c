@@ -95,7 +95,7 @@ void *pgdps_data_plane_run(void *arg) {
       continue;
     }
 
-    /* Safe to read only now that checkout() holds reader_locked == idx;
+    /* Safe to read only now that checkout() holds server_locked == idx;
      * a clients publish already does a generation check which guarantees
      * an evicted client's frame stop landing in the ring, so this frame
      * is legal */

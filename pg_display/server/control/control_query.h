@@ -67,7 +67,7 @@ typedef struct {
  *                 removes that as an assumption later)
  * @pending:       the current in-flight query, or NULL if none
  *
- * One instance shared between reader's admin thread and control thread, created once
+ * One instance shared between server's admin thread and control thread, created once
  * at startup before either thread runs.
  */
 typedef struct {

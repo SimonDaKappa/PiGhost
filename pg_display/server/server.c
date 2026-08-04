@@ -1,4 +1,4 @@
-// reader.c - the server service's real entrypoint.
+// server.c - the server service's real entrypoint.
 //
 // Wires up all three threads (admin, control, data) around the shm ring +
 // frame-ready eventfd, using fb_sink_file.c as a stand-in output sink
@@ -36,13 +36,13 @@ static const char *g_frame_out_dir = "/tmp/pgdp_frames";
 int main(void) {
   pgdp_shm_ring_t *ring = pgdps_shm_ring_create();
   if (!ring) {
-    fprintf(stderr, "[pgipc-reader] failed to create shm ring\n");
+    fprintf(stderr, "[pgdp_server] failed to create shm ring\n");
     return 1;
   }
 
   int frame_fd = pgdps_frame_fd_create();
   if (frame_fd < 0) {
-    fprintf(stderr, "[pgipc-reader] failed to create frame-ready eventfd\n");
+    fprintf(stderr, "[pgdp_server] failed to create frame-ready eventfd\n");
     pgdps_shm_ring_destroy(ring);
     return 1;
   }
@@ -54,7 +54,7 @@ int main(void) {
       .max_snapshots = 0,
   };
   if (pgdps_fb_sink_file_create(&sink, &sink_opts) != 0) {
-    fprintf(stderr, "[pgipc-reader] failed to create file sink at %s\n",
+    fprintf(stderr, "[pgdp_server] failed to create file sink at %s\n",
             g_frame_out_dir);
     close(frame_fd);
     pgdps_shm_ring_destroy(ring);
@@ -64,7 +64,7 @@ int main(void) {
   pgdps_data_plane_t dp;
   if (pgdps_data_plane_init(&dp, ring, frame_fd, &sink, g_supported_modes[0].width,
                             g_supported_modes[0].height) != 0) {
-    fprintf(stderr, "[pgipc-reader] failed to init data plane\n");
+    fprintf(stderr, "[pgdp_server] failed to init data plane\n");
     pgdps_fb_sink_close(&sink);
     close(frame_fd);
     pgdps_shm_ring_destroy(ring);
@@ -73,7 +73,7 @@ int main(void) {
 
   pgdps_control_query_channel_t chan;
   if (pgdps_control_query_channel_init(&chan) != 0) {
-    fprintf(stderr, "[pgipc-reader] failed to init control-query channel\n");
+    fprintf(stderr, "[pgdp_server] failed to init control-query channel\n");
     pgdps_fb_sink_close(&sink);
     close(frame_fd);
     pgdps_shm_ring_destroy(ring);
@@ -82,7 +82,7 @@ int main(void) {
 
   pgdps_admin_plane_t ap;
   if (pgdps_admin_plane_init(&ap, &chan) != 0) {
-    fprintf(stderr, "[pgipc-reader] failed to init admin plane\n");
+    fprintf(stderr, "[pgdp_server] failed to init admin plane\n");
     pgdps_control_query_channel_close(&chan);
     pgdps_fb_sink_close(&sink);
     close(frame_fd);
@@ -93,7 +93,7 @@ int main(void) {
   pgdps_control_plane_t cp;
   if (pgdps_control_plane_init(&cp, ring, frame_fd, &dp, &chan, g_supported_modes,
                                NUM_SUPPORTED_MODES) != 0) {
-    fprintf(stderr, "[pgipc-reader] failed to init control plane\n");
+    fprintf(stderr, "[pgdp_server] failed to init control plane\n");
     pgdps_admin_plane_close(&ap);
     pgdps_control_query_channel_close(&chan);
     pgdps_fb_sink_close(&sink);
@@ -117,7 +117,7 @@ int main(void) {
   pthread_create(&control_thread, NULL, pgdps_control_plane_run, &cp);
   pthread_create(&data_thread, NULL, pgdps_data_plane_run, &dp);
 
-  printf("[pgipc-reader] running: admin=%s control=%s shm=%s frames=%s "
+  printf("[pgdp_server] running: admin=%s control=%s shm=%s frames=%s "
          "(SIGINT/SIGTERM to stop)\n",
          PGDPS_ADMIN_SOCK_PATH, PGDPS_CONTROL_SOCK_PATH, PGDP_SHM_NAME,
          g_frame_out_dir);
@@ -125,7 +125,7 @@ int main(void) {
 
   int sig = 0;
   sigwait(&mask, &sig);
-  printf("[pgipc-reader] received signal %d, shutting down\n", sig);
+  printf("[pgdp_server] received signal %d, shutting down\n", sig);
   fflush(stdout);
 
   /* Stop order matches the one exercised (and TSan-validated) in

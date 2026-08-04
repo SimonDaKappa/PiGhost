@@ -29,7 +29,7 @@
 // This header serves three kinds of translation units:
 //
 //   - client applications (renderer, slideshow, sine-wave demo, ...)
-//   - the single server/reader service
+//   - the single server/server service
 //   - shared test/simulation code that legitimately needs both sides
 //
 // Wire-format types and the plain (non-fd) control framing functions (pgdp_ctrl_send /
@@ -70,7 +70,7 @@
 //     Frames live in PGDP_NUM_BUFFERS GPU buffers (GBM bos / dmabufs) allocated by the
 //     client. The dmabuf fds are passed ONCE, at session setup, over the control socket
 //     via SCM_RIGHTS. After that, the per-frame hot path is *identical* to pixels mode:
-//     the shm ring's latest_ready / reader_locked / frame_id / write_ts fields are used
+//     the shm ring's latest_ready / server_locked / frame_id / write_ts fields are used
 //     exactly the same way. A slot index simply refers to the client's announced
 //     dmabuf[idx] instead of ring->frame_bufs[idx]. No pixel data ever crosses the shm
 //     segment.
@@ -130,8 +130,8 @@
 //     eventfd, checkout() -> idx,
 //     but instead of memcpy'ing ring->frame_bufs[idx], page-flip to the KMS
 //     framebuffer imported from that client's dmabuf[idx].
-//   * reader_locked semantics: a scanout buffer is "in use" until the flip
-//     AWAY from it completes. Keep reader_locked = the currently-scanned-out
+//   * server_locked semantics: a scanout buffer is "in use" until the flip
+//     AWAY from it completes. Keep server_locked = the currently-scanned-out
 //     index for that whole interval, then release/checkout the next.
 //   * On client switch/eviction: call pgdps_evict_client()
 //     (bumps generation AND resets latest_ready to -1) and flip to a
@@ -338,7 +338,8 @@ static inline uint64_t pgdp__ts_diff_ns(struct timespec a, struct timespec b) {
 /**
  * struct pgdp_shm_ring_t - frame buffer shared memory ring for both conn sides
  * @latest_ready:     index of newest complete frame, -1 if none
- * @reader_locked:    index reader currently holds, -1 if none
+ * @server_locked:    index server currently holds, -1 if none
+ * @client_locked:    index client actively holds/rendering into, -1 if none
  * @frame_counter:    monotonically increasing frame id, global
  * @generation:       bumped by server on every activation switch; a client whose
  *                    granted generation no longer matches this has been evicted and
@@ -347,7 +348,7 @@ static inline uint64_t pgdp__ts_diff_ns(struct timespec a, struct timespec b) {
  * @write_ts_ns:      when each buffer was published (for latency calc)
  * @frame_bufs:       individual frame buffers (PIXELS payload mode only; in the DMABUF
  *                    mode the indices refer to the client's announced dmabuf set)
- * @bookkeeping_lock: cross-process mutex serializing @latest_ready/@reader_locked
+ * @bookkeeping_lock: cross-process mutex serializing @latest_ready/@server_locked
  *                    updates. guards bookkeeping only, never the pixel copy
  *
  * Never allocate or copy this struct by value, only ever map it at a fixed address via
@@ -356,13 +357,14 @@ static inline uint64_t pgdp__ts_diff_ns(struct timespec a, struct timespec b) {
  * @note layout is byte-for-byte identical across payload mode. The dmabuf mode is
  * purely a control-plane extension; slot indices mean the same thing in both modes.
  *
- * @note latest_ready, reader_locked, frame_counter, generation are aligned on separate
+ * @note latest_ready, server_locked, frame_counter, generation are aligned on separate
  * cache lines to help with the cross process/thread hammering on them at high
  * framerates.
  */
 typedef struct {
   PGDP_ATOMIC PGDP_CACHELINE_FIELD(int32_t, latest_ready);
-  PGDP_ATOMIC PGDP_CACHELINE_FIELD(int32_t, reader_locked);
+  PGDP_ATOMIC PGDP_CACHELINE_FIELD(int32_t, server_locked);
+  PGDP_ATOMIC PGDP_CACHELINE_FIELD(int32_t, client_locked);
   PGDP_ATOMIC PGDP_CACHELINE_FIELD(uint32_t, frame_counter);
   PGDP_ATOMIC PGDP_CACHELINE_FIELD(uint32_t, generation);
   uint64_t frame_id[PGDP_NUM_BUFFERS];
@@ -373,11 +375,13 @@ typedef struct {
 
 PGDP_SASSERT(offsetof(pgdp_shm_ring_t, latest_ready) == 0 * PGDP_CACHELINE,
              "field spacing drift");
-PGDP_SASSERT(offsetof(pgdp_shm_ring_t, reader_locked) == 1 * PGDP_CACHELINE,
+PGDP_SASSERT(offsetof(pgdp_shm_ring_t, server_locked) == 1 * PGDP_CACHELINE,
              "field spacing drift");
-PGDP_SASSERT(offsetof(pgdp_shm_ring_t, frame_counter) == 2 * PGDP_CACHELINE,
+PGDP_SASSERT(offsetof(pgdp_shm_ring_t, client_locked) == 2 * PGDP_CACHELINE,
              "field spacing drift");
-PGDP_SASSERT(offsetof(pgdp_shm_ring_t, generation) == 3 * PGDP_CACHELINE,
+PGDP_SASSERT(offsetof(pgdp_shm_ring_t, frame_counter) == 3 * PGDP_CACHELINE,
+             "field spacing drift");
+PGDP_SASSERT(offsetof(pgdp_shm_ring_t, generation) == 4 * PGDP_CACHELINE,
              "field spacing drift");
 PGDP_SASSERT(PGDP_ALIGNOF(pgdp_shm_ring_t) == PGDP_CACHELINE, "ring alignment drift");
 
@@ -557,8 +561,12 @@ PGDP_DEF void pgdpc_publish(pgdpc_ctx_t *ctx, int idx, uint64_t frame_id);
  * @ctx: client session context
  *
  * Picks any index that is neither the currently-published frame (@latest_ready) nor the
- * reader's currently-locked index (@reader_locked), guaranteeing the write never tears
- * a frame the reader (or the flip-away-from logic in dmabuf mode) is using.
+ * server's currently-locked index (@server_locked), guaranteeing the write never tears
+ * a frame the server (or the flip-away-from logic in dmabuf mode) is using. A client
+ * may only lock at most one frame at any given moment.
+ *
+ * @note: If the client does a double request for a write slot before a
+ * @pgdpc_publish(), it will be aborted!
  *
  * Return: a writable buffer index (0..PGDP_NUM_BUFFERS-1).
  */
@@ -628,8 +636,8 @@ PGDP_DEF int pgdps_frame_fd_create(void);
  * pgdps_shm_ring_checkout() - claim the newest ready frame for reading
  * @ring: attached/created ring
  *
- * Marks @ring's newest complete frame as reader-locked so the client's slot-picking
- * logic will not reuse it out from under the reader. Call pgdps_shm_ring_release() when
+ * Marks @ring's newest complete frame as server-locked so the client's slot-picking
+ * logic will not reuse it out from under the server. Call pgdps_shm_ring_release() when
  * done with the buffer (e.g. after finishing the memcpy/page-flip to HDMI).
  *
  * Return: buffer index to read (0..PGDP_NUM_BUFFERS-1), or -1 if no frame has been
@@ -641,7 +649,7 @@ PGDP_DEF int pgdps_shm_ring_checkout(pgdp_shm_ring_t *ring);
  * pgdps_shm_ring_release() - release the buffer claimed by checkout()
  * @ring: attached/created ring
  *
- * Clears the reader-locked index back to -1. Safe to call even if no checkout is
+ * Clears the server-locked index back to -1. Safe to call even if no checkout is
  * currently held.
  */
 PGDP_DEF void pgdps_shm_ring_release(pgdp_shm_ring_t *ring);
@@ -1185,7 +1193,8 @@ PGDP_DEF pgdp_shm_ring_t *pgdps_shm_ring_create(void) {
 
   memset(ring, 0, sizeof(pgdp_shm_ring_t));
   pgdp_atomic_store(&ring->latest_ready, -1);
-  pgdp_atomic_store(&ring->reader_locked, -1);
+  pgdp_atomic_store(&ring->server_locked, -1);
+  pgdp_atomic_store(&ring->client_locked, -1);
   pgdp_atomic_store(&ring->frame_counter, 0);
   pgdp_atomic_store(&ring->generation, 0);
 
@@ -1218,14 +1227,14 @@ PGDP_DEF int pgdps_shm_ring_checkout(pgdp_shm_ring_t *ring) {
   pgdp__shm_ring_lock(ring);
   int idx = pgdp_atomic_load(&ring->latest_ready);
   if (idx >= 0)
-    pgdp_atomic_store(&ring->reader_locked, idx);
+    pgdp_atomic_store(&ring->server_locked, idx);
   pgdp__shm_ring_unlock(ring);
   return idx;
 }
 
 PGDP_DEF void pgdps_shm_ring_release(pgdp_shm_ring_t *ring) {
   pgdp__shm_ring_lock(ring);
-  pgdp_atomic_store(&ring->reader_locked, -1);
+  pgdp_atomic_store(&ring->server_locked, -1);
   pgdp__shm_ring_unlock(ring);
 }
 
@@ -1233,6 +1242,8 @@ PGDP_DEF void pgdps_evict_client(pgdp_shm_ring_t *ring) {
   pgdp__shm_ring_lock(ring);
   pgdp_atomic_fetch_add(&ring->generation, 1);
   pgdp_atomic_store(&ring->latest_ready, -1);
+  pgdp_atomic_store(&ring->server_locked, -1);
+  pgdp_atomic_store(&ring->client_locked, -1);
   pgdp__shm_ring_unlock(ring);
 }
 #endif /* LIBPGDP_SERVER */
@@ -1243,18 +1254,37 @@ PGDP_DEF int pgdpc_write_slot(pgdpc_ctx_t *ctx) {
 
   pgdp__shm_ring_lock(ctx->ring);
   int ready = pgdp_atomic_load(&ctx->ring->latest_ready);
-  int locked = pgdp_atomic_load(&ctx->ring->reader_locked);
+  int s_locked = pgdp_atomic_load(&ctx->ring->server_locked);
+  int c_locked = pgdp_atomic_load(&ctx->ring->client_locked);
 
-  int slot = 0;
+  if (c_locked != -1) {
+    /* since client somehow broke a *very important* invariant, let them crash.
+     * server can recover from this. */
+    fprintf(stderr,
+            "[pgipc:%s] ERROR: client_locked=%d, but caller did not release it\n",
+            ctx->client_id, c_locked);
+    pgdp__shm_ring_unlock(ctx->ring);
+    abort();
+  }
+
   for (int i = 0; i < PGDP_NUM_BUFFERS; i++) {
-    if (i != ready && i != locked) {
-      slot = i;
+    if (i != ready && i != s_locked) {
+      c_locked = i;
       break;
     }
   }
 
+  if (c_locked == -1) {
+    fprintf(stderr,
+            "[pgipc:%s] ERROR: no free slot available (ready=%d, server_locked=%d)\n",
+            ctx->client_id, ready, s_locked);
+    pgdp__shm_ring_unlock(ctx->ring);
+    abort();
+  }
+
+  pgdp_atomic_store(&ctx->ring->client_locked, c_locked);
   pgdp__shm_ring_unlock(ctx->ring);
-  return slot;
+  return c_locked;
 }
 
 /**
@@ -1274,6 +1304,7 @@ PGDP_DEF void pgdpc__shm_ring_publish(pgdp_shm_ring_t *ring, int idx, uint64_t f
   ring->write_ts_ns[idx] = now_ns;
   pgdp__shm_ring_lock(ring);
   pgdp_atomic_store(&ring->latest_ready, idx);
+  pgdp_atomic_store(&ring->client_locked, -1);
   pgdp__shm_ring_unlock(ring);
 }
 #endif /* LIBPGDP_CLIENT */

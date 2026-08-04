@@ -85,7 +85,7 @@ static void render_sine_frame(unsigned char *pixels, uint32_t width, uint32_t he
 
 int main(void) {
   /* Offer the same mode list the reference server advertises
-   * (pg_display/server/reader.c), most-preferred first. Any producer app
+   * (pg_display/server/server.c), most-preferred first. Any producer app
    * can offer a different/smaller list; the server picks the first
    * mutual match (SPEC.md §5). */
   const pgdp_render_mode_t offered_modes[] = {
