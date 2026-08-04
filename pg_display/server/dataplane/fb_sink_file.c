@@ -21,6 +21,9 @@ typedef struct {
 
 /**
  * file_open() - ensure the output directory exists
+ * @ctxv:   pgdps_fb_sink_file_ctx_t*, file sink state
+ * @width:  negotiated frame width
+ * @height: negotiated frame height
  *
  * idempotent; safe to call again on a mode change.
  */
@@ -28,6 +31,11 @@ static int file_open(void *ctxv, uint32_t width, uint32_t height);
 
 /**
  * file_blit() - push one frame to the sink
+ * @ctxv:     pgdps_fb_sink_file_ctx_t*, file sink stae
+ * @pixels:   tightly packed XRGB8888 pixel data, @height rows of @width pixels
+ * @width:    negotiated frame width
+ * @height:   negotiated frame height
+ * @frame_id: producer-assigned frame id, forwarded for logging/diagnostics only
  * 
  * Write latest.ppm and possibly a numbered snapshot.
  */
@@ -35,7 +43,8 @@ static int file_blit(void *ctxv, const unsigned char *pixels, uint32_t width,
                      uint32_t height, uint64_t frame_id);
 
 /**
- * file_close() - release all resources 
+ * file_close() - release all resources
+ * @ctxv: pgdps_fb_sink_file_ctx_t*, file sink state
  */
 static void file_close(void *ctxv);
 
@@ -47,6 +56,10 @@ static const pgdps_fb_sink_ops_t pgdps_fb_sink_file_ops = {
 
 /**
  * write_ppm() - dump one XRGB8888 frame as a binary PPM (P6) file.
+ * @path:    output file path
+ * @pixels:  tightly packed XRGB8888 pixel data, @height rows of @width pixels
+ * @width:   frame width
+ * @height:  frame height
  *
  * Pixel format note: frames arrive as PGDP_FORMAT_XRGB8888 (libpgdp.h), which per DRM
  * convention is a 32-bit little-endian word laid out 0xXXRRGGBB (i.e. in memory byte
@@ -59,6 +72,8 @@ static int write_ppm(const char *path, const unsigned char *pixels, uint32_t wid
 
 /**
  * file_snapshot_record() - track a newly-written numbered snapshot
+ * @ctx:  file sink state
+ * @path: path of the newly-written snapshot
  *
  * Evicts the oldest one if the ring is full. No-op if snapshots are unbounded
  * (max_snapshots == 0).

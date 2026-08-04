@@ -213,7 +213,7 @@ extern "C" {
     unsigned char PGDP_CAT(pad_, __LINE__)[PGDP_CACHELINE];                            \
   }
 
-/**
+/*
  * Marker for what should be a `atomic_*|_Atomic` type but isn't for cross-language ABI
  * stability and reinterpretation.
  *
@@ -224,7 +224,7 @@ extern "C" {
  */
 #define PGDP_ATOMIC
 
-/**
+/*
  * pgdp__atomic_{load,store,fetch_add}_{i32,u32,bool} - the single, unified atomic
  * primitive used throughout, for cross-language ABI stability.
  *
@@ -431,7 +431,7 @@ typedef struct {
 #ifdef LIBPGDP_CLIENT
 
 /**
- * pgdpc_ctx_t - client session handle
+ * typedef pgdpc_ctx_t - client session handle
  *
  * Opaque; treat as a handle. Returned by pgdpc_connect() and passed to (almost) every
  * other pgdpc_*() call.
@@ -459,7 +459,8 @@ typedef struct {
 
 /**
  * pgdpc_connect() - establish a client session with the server
- * @client_id:     this client's application id (truncated to PGDP_CLIENT_ID_LEN-1 bytes)
+ * @client_id:     this client's application id (truncated to PGDP_CLIENT_ID_LEN-1
+ * bytes)
  * @modes:      render modes this client supports, in order of preference
  * @num_modes:  number of entries in @modes (truncated to PGDP_MAX_MODES)
  *
@@ -472,8 +473,8 @@ typedef struct {
  * Return: a new session context, or NULL if the control socket could not be reached or
  * the server rejected every offered mode.
  */
-PGDP_DEF pgdpc_ctx_t *pgdpc_connect(const char *client_id, const pgdp_render_mode_t *modes,
-                                    int num_modes);
+PGDP_DEF pgdpc_ctx_t *pgdpc_connect(const char *client_id,
+                                    const pgdp_render_mode_t *modes, int num_modes);
 
 /**
  * pgdpc_disconnect() - tear down a client session
@@ -502,7 +503,6 @@ PGDP_DEF bool pgdpc_is_active(pgdpc_ctx_t *ctx);
 PGDP_DEF pgdp_render_mode_t pgdpc_negotiated_mode(pgdpc_ctx_t *ctx);
 
 /**
- * $$$SIMON TODO PLACE THIS BETTER?
  * pgdpc_announce_dmabufs() - switch this session to the DMABUF mode
  * @ctx:        session handle
  * @fds:        dmabuf fds, index-aligned with ring slots
@@ -1144,12 +1144,15 @@ static void pgdp__shm_ring_lock(pgdp_shm_ring_t *ring) {
 }
 
 /**
- * pgdp__shm_ring_unlock() - release @ring's bookkeeping mutex */
+ * pgdp__shm_ring_unlock() - release @ring's bookkeeping mutex
+ * @ring: attached/created ring
+ */
 static void pgdp__shm_ring_unlock(pgdp_shm_ring_t *ring) {
   pthread_mutex_unlock(&ring->bookkeeping_lock);
 }
 
 #ifdef LIBPGDP_SERVER
+
 PGDP_DEF pgdp_shm_ring_t *pgdps_shm_ring_create(void) {
   if (!__atomic_always_lock_free(sizeof(int32_t), 0) ||
       !__atomic_always_lock_free(sizeof(uint32_t), 0)) {
@@ -1375,7 +1378,7 @@ PGDP_DEF int pgdp_ctrl_send_fds(int fd, pgdp_msg_type_t type, const void *payloa
 }
 
 /**
- * pgdp__close_fds() - close every valid (>=0) fd in @fds[0..nfds).
+ * pgdp__close_fds() - close every valid (>=0) fd in @fds [0..nfds).
  * @fds:  file descriptors to close
  * @nfds: number of fds
  *
@@ -1638,8 +1641,8 @@ static void *pgdp__client_ctrl(void *arg) {
 #endif /* LIBPGDP_CLIENT */
 
 #ifdef LIBPGDP_CLIENT
-PGDP_DEF pgdpc_ctx_t *pgdpc_connect(const char *client_id, const pgdp_render_mode_t *modes,
-                                    int num_modes) {
+PGDP_DEF pgdpc_ctx_t *pgdpc_connect(const char *client_id,
+                                    const pgdp_render_mode_t *modes, int num_modes) {
   pgdpc_ctx_t *ctx = (pgdpc_ctx_t *)calloc(1, sizeof(pgdpc_ctx_t));
   if (!ctx)
     return NULL;
@@ -1674,7 +1677,8 @@ PGDP_DEF pgdpc_ctx_t *pgdpc_connect(const char *client_id, const pgdp_render_mod
   }
 
   if (fd < 0) {
-    fprintf(stderr, "[pgipc:%s] could not connect to server control socket\n", client_id);
+    fprintf(stderr, "[pgipc:%s] could not connect to server control socket\n",
+            client_id);
     free(ctx);
     return NULL;
   }

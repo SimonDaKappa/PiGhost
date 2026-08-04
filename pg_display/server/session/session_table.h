@@ -24,9 +24,7 @@
 extern "C" {
 #endif
 
-/**
- * PGDPS_SESSION__MAX_CLIENTS - Max concurrently-connected client-control sessions
- */
+/* Max concurrently-connected client-control sessions */
 #define PGDPS_SESSION_MAX_CLIENTS 8
 
 /**

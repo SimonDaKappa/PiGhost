@@ -65,27 +65,36 @@ static void activate(pgdps_control_plane_t *cp, int idx);
 
 /**
  * handle_readable() - one recv+dispatch cycle for slot @idx.
+ * @cp:  control plane handling the message
+ * @idx: session table slot index of the readable fd
  */
 static void handle_readable(pgdps_control_plane_t *cp, int idx);
 
 /**
  * handle_list_query() - fill a LIST query from the real table.
+ * @cp:    control plane handling the query
+ * @query: the LIST query to fill
  */
 static void handle_list_query(pgdps_control_plane_t *cp, pgdps_control_query_t *query);
 
 /**
  * handle_switch_query() - switch semantics.
+ * @cp:    control plane handling the query
+ * @query: the SWITCH query to handle
  */
 static void handle_switch_query(pgdps_control_plane_t *cp,
                                 pgdps_control_query_t *query);
 
 /**
  * drain_admin_query() - answer whatever the admin thread posted.
+ * @cp: control plane handling the admin query
  */
 static void drain_admin_query(pgdps_control_plane_t *cp);
 
 /**
  * handle_disconnect() - close+free a slot.
+ * @cp:  control plane handling the message
+ * @idx: session table slot index of the disconnecting fd
  *
  * Shared by: an explicit PGDP_MSG_DISCONNECT, a socket EOF/error, and a rejected
  * CONNECT (REJECTED -> CLOSED is immediate).
@@ -94,17 +103,34 @@ static void handle_disconnect(pgdps_control_plane_t *cp, int idx);
 
 /**
  * handle_connect() - CONNECT -> mode negotiation.
+ * @cp:      control plane handling the message
+ * @idx:     session table slot index of the connecting fd
+ * @connect: the CONNECT message payload
  */
 static void handle_connect(pgdps_control_plane_t *cp, int idx,
                            const pgdp_connect_msg_t *connect);
 
 /**
  * handle_activate_request() - granting rules.
+ * @cp:  control plane handling the message
+ * @idx: session table slot index of the requesting fd
  */
 static void handle_activate_request(pgdps_control_plane_t *cp, int idx);
 
 /**
+ * handle_heartbeat() - refresh the ACTIVE client's liveness stamp. 
+ * @cp:  control plane handling the message
+ * @idx: session table slot index of the heartbeat fd
+ */
+static void handle_heartbeat(pgdps_control_plane_t *cp, int idx);
+
+/**
  * handle_dmabuf_announce() - always refuse in v1.
+ * @cp:   control plane handling the message
+ * @idx:  session table slot index of the announcing fd
+ * @msg:  the DMABUF_ANNOUNCE message payload
+ * @fds:  array of file descriptors accompanying the message
+ * @nfds: number of valid entries in @fds
  *
  * Real KMS/DRM import is out of scope for this version; always responding (never
  * leaving the announcing producer waiting) lets it fall back to its own
@@ -336,7 +362,7 @@ static void activate(pgdps_control_plane_t *cp, int idx) {
 
   pgdp_grant_msg_t grant = {.generation = generation};
   pgdp_ctrl_send_fds(cp->table.slots[idx].ctrl_fd, PGDP_MSG_ACTIVATE_GRANT, &grant,
-                      sizeof(grant), &cp->frame_fd, 1);
+                     sizeof(grant), &cp->frame_fd, 1);
 
   pgdp_render_mode_t new_mode = cp->table.slots[idx].negotiated_mode;
   if (cp->dp && (prev_active < 0 || new_mode.width != prev_mode.width ||
@@ -345,7 +371,11 @@ static void activate(pgdps_control_plane_t *cp, int idx) {
 }
 
 /**
- * translate_state() - internal state -> wire state */
+ * translate_state() - internal state -> wire state 
+ * @state: internal session state
+ *
+ * Returns: corresponding wire state (pgdps_admin_client_state_t)
+ */
 static pgdps_admin_client_state_t translate_state(pgdps_session_state_t state) {
   switch (state) {
   case PGDPS_SESSION_CONNECTED:
@@ -481,8 +511,6 @@ static void handle_activate_request(pgdps_control_plane_t *cp, int idx) {
   pgdp_ctrl_send(slot->ctrl_fd, PGDP_MSG_ACTIVATE_DENY, &deny, sizeof(deny));
 }
 
-/**
- * handle_heartbeat() - refresh the ACTIVE client's liveness stamp. */
 static void handle_heartbeat(pgdps_control_plane_t *cp, int idx) {
   pgdps_session_t *slot = &cp->table.slots[idx];
   if (slot->state != PGDPS_SESSION_ACTIVE)
@@ -517,7 +545,7 @@ static void handle_readable(pgdps_control_plane_t *cp, int idx) {
   int nfds = 0;
 
   int rc = pgdp_ctrl_recv_fds(slot->ctrl_fd, &type, buf, sizeof(buf), &len, fds,
-                               PGDP_NUM_BUFFERS, &nfds);
+                              PGDP_NUM_BUFFERS, &nfds);
   if (rc == -1) {
     handle_disconnect(cp, idx);
     return;

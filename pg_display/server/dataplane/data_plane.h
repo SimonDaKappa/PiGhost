@@ -49,6 +49,7 @@ typedef struct {
  * @abort_fd: eventfd created internally by dataplane init; written by kick to instantly
  *            wake the loop out of epoll_wait() without touching @frame_fd, e.g. after
  *            an admin-driven eviction/swap
+ * @epoll_fd: epoll instance created to wrap @abort_fd and @frame_fd
  * @sink:     output sink frames are blitted through
  * @width:    current negotiated frame width, in pixels
  * @height:   current negotiated frame height, in pixels

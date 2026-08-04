@@ -5,5 +5,5 @@ PGIPC Documentation
    :maxdepth: 2
    :caption: Sub-projects:
 
-   libpgipc
-   display
+   libpgdp
+   server

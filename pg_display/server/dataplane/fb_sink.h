@@ -57,23 +57,20 @@ struct pgdps_fb_sink_t {
   void *ctx;
 };
 
-/**
- * pgdps_fb_sink_open() - see pgdps_fb_sink_ops_t::open */
+/* see pgdps_fb_sink_ops_t::open */
 static inline int pgdps_fb_sink_open(pgdps_fb_sink_t *sink, uint32_t width,
                                      uint32_t height) {
   return sink->ops->open(sink->ctx, width, height);
 }
 
-/**
- * pgdps_fb_sink_blit() - see pgdps_fb_sink_ops_t::blit */
+/* see pgdps_fb_sink_ops_t::blit */
 static inline int pgdps_fb_sink_blit(pgdps_fb_sink_t *sink, const unsigned char *pixels,
                                      uint32_t width, uint32_t height,
                                      uint64_t frame_id) {
   return sink->ops->blit(sink->ctx, pixels, width, height, frame_id);
 }
 
-/**
- * pgdps_fb_sink_close() - see pgdps_fb_sink_ops_t::close */
+/* see pgdps_fb_sink_ops_t::close */
 static inline void pgdps_fb_sink_close(pgdps_fb_sink_t *sink) {
   if (sink->ops->close)
     sink->ops->close(sink->ctx);

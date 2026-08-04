@@ -10,7 +10,7 @@
 #include <sys/un.h>
 #include <unistd.h>
 
-/**
+/*
  * PGDSP_ADMIN_RECV_BUF_SIZE - max size of an admin message
  *
  * Generous fixed buffer: the largest admin payload today is pgdps_admin_list_response_t
@@ -21,17 +21,24 @@
 
 /**
  * handle_list() - LIST_REQUEST -> a filled query -> response. 
+ * @ap:        admin plane handling the list
+ * @client_fd: the requesting client's fd
  */
 static void handle_list(pgdps_admin_plane_t *ap, int client_fd);
 
 /**
  * handle_switch() - SWITCH_REQUEST -> a filled query -> response.
+ * @ap:        admin plane handling the switch
+ * @client_fd: the requesting client's fd
+ * @req:       the switch request
  */
 static void handle_switch(pgdps_admin_plane_t *ap, int client_fd,
                           const pgdps_admin_switch_request_t *req);
 
 /**
  * handle_connection() - one connect->request->response->close cycle.
+ * @ap:        admin plane handling the connection
+ * @client_fd: the connected client's fd
  *
  * Never crashes on malformed input. An unrecognized/oversized/short message just closes
  * the connection with no reply, exactly like the producer control protocol's own
