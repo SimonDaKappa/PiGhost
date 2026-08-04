@@ -124,17 +124,14 @@ TEST_F(DataPlaneTest, SineWaveRendersWithZeroDropsAndProducesViewableFrames) {
   pgdp_atomic_store(&fake_ctx.ring->generation, 1);
 
   for (int i = 0; i < total_frames; i++) {
-    // fake client side: identical shape to what pgdpc_publish() does
-    // internally, minus the control-plane generation check (there is no
-    // control-plane session here to evict).
     int slot = pgdpc_write_slot(&fake_ctx);
     RenderSineFrame(ring_->frame_bufs[slot], kWidth, kHeight, phase);
 
     struct timespec now;
     clock_gettime(CLOCK_MONOTONIC, &now);
-    // uint64_t now_ns = ((uint64_t)now.tv_sec * 1000000000ULL) + now.tv_nsec;
-    // pgdpc__shm_ring_publish(fake_ctx.ring, slot, frame_id++, now_ns);
-    pgdpc_publish(&fake_ctx, slot, frame_id++);
+    ASSERT_GE(pgdpc_publish(&fake_ctx, slot, frame_id), 0);
+    
+    frame_id++;
     uint64_t v = 1;
     write(frame_fd_, &v, sizeof(v));
 

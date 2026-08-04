@@ -92,7 +92,7 @@
 //   // Per frame (same as pixels mode, but render with the GPU):
 //   int slot = pgdpc_write_slot(ctx);
 //   ... bind FBO wrapping gb.bo[slot], draw, glFinish() ...   // see note (1)
-//   pgdpc_publish(ctx, slot, frame_id);
+//   int ok = pgdpc_publish(ctx, slot, frame_id);
 // ```
 //
 // (1) EXPLICIT SYNC REQUIREMENT: in DMABUF mode the client MUST ensure the GPU has
@@ -553,8 +553,10 @@ PGDP_DEF pgdp_payload_kind_t pgdpc_payload_kind(pgdpc_ctx_t *ctx);
  * @ctx's granted generation. In the latter case this call also flips @ctx to inactive
  * so subsequent callers see pgdpc_is_active() return false without waiting for
  * the next control message.
+ * 
+ * Returns: 0 if publish successful, -1 if client inactive, -2 if generation mismatch
  */
-PGDP_DEF void pgdpc_publish(pgdpc_ctx_t *ctx, int idx, uint64_t frame_id);
+PGDP_DEF int pgdpc_publish(pgdpc_ctx_t *ctx, int idx, uint64_t frame_id);
 
 /**
  * pgdpc_write_slot() - choose a free buffer index to write
@@ -1841,13 +1843,13 @@ PGDP_DEF int pgdpc_announce_dmabufs(pgdpc_ctx_t *ctx, const int fds[PGDP_NUM_BUF
   }
 }
 
-PGDP_DEF void pgdpc_publish(pgdpc_ctx_t *ctx, int idx, uint64_t frame_id) {
+PGDP_DEF int pgdpc_publish(pgdpc_ctx_t *ctx, int idx, uint64_t frame_id) {
   if (!pgdp_atomic_load(&ctx->active))
-    return;
+    return -1;
   if (pgdp_atomic_load(&ctx->ring->generation) !=
       pgdp_atomic_load(&ctx->granted_generation)) {
     pgdp_atomic_store(&ctx->active, false);
-    return;
+    return -2;
   }
 
   struct timespec now;
@@ -1862,6 +1864,8 @@ PGDP_DEF void pgdpc_publish(pgdpc_ctx_t *ctx, int idx, uint64_t frame_id) {
       n = write(ctx->frame_fd, &v, sizeof(v));
     } while (n < 0 && errno == EINTR);
   }
+
+  return 0;
 }
 
 PGDP_DEF void pgdpc_disconnect(pgdpc_ctx_t *ctx) {
