@@ -147,7 +147,12 @@ int main(void) {
       int idx = pgdpc_write_slot(ctx);
       if (idx >= 0) {
         render_sine_frame(ctx->ring->frame_bufs[idx], mode.width, mode.height, phase);
-        pgdpc_publish(ctx, idx, frame_id++);
+        if (pgdpc_publish(ctx, idx, frame_id) < 0) {
+          fprintf(stderr, "[sine_wave_cpu] failed to publish, frame_id++");
+          continue;
+        }
+
+        frame_id++;
         frames_published++;
         phase += phase_speed * frame_interval_s;
         if (phase > 2.0 * M_PI)
