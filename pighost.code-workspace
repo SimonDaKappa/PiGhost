@@ -9,20 +9,20 @@
             "path": "yocto"
         },
         {
-            "name": "libpgipc",
-            "path": "pgipc_dev/libpgipc"
+            "name": "libpgdp",
+            "path": "pg_display/libpgdp"
         },
         {
-            "name": "display",
-            "path": "pgipc_dev/display"
+            "name": "server",
+            "path": "pg_display/server"
         },
         {
             "name": "moving_sine_wave_cpu",
-            "path": "pgipc_dev/writers/moving_sine_wave_cpu"
+            "path": "pg_display/clients/moving_sine_wave_cpu"
         },
         {
             "name": "moving_sine_wave_gpu",
-            "path": "pgipc_dev/writers/moving_sine_wave_gpu"
+            "path": "pg_display/clients/moving_sine_wave_gpu"
         }
     ],
     "settings": {
