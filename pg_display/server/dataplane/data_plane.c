@@ -1,5 +1,5 @@
 // data_plane.c - see data_plane.h.
-#define LIBPGIPC_READER
+#define LIBPGDP_SERVER
 #include "data_plane.h"
 
 #include <errno.h>
@@ -9,8 +9,8 @@
 #include <time.h>
 #include <unistd.h>
 
-int pgipc_data_plane_init(pgipc_data_plane_t *dp, pgipc_shm_ring_t *ring, int frame_fd,
-                          pgipc_fb_sink_t *sink, uint32_t width, uint32_t height) {
+int pgdps_data_plane_init(pgdps_data_plane_t *dp, pgdp_shm_ring_t *ring, int frame_fd,
+                          pgdps_fb_sink_t *sink, uint32_t width, uint32_t height) {
   dp->ring = ring;
   dp->frame_fd = frame_fd;
   dp->sink = sink;
@@ -22,7 +22,7 @@ int pgipc_data_plane_init(pgipc_data_plane_t *dp, pgipc_shm_ring_t *ring, int fr
   atomic_store(&dp->stats.blit_errors, 0);
   atomic_store(&dp->stats.last_write_to_render_ns, 0);
 
-  if (pgipc_fb_sink_open(sink, width, height) != 0) {
+  if (pgdps_fb_sink_open(sink, width, height) != 0) {
     fprintf(stderr, "[data_plane] sink open failed at %ux%u\n", width, height);
     return -1;
   }
@@ -52,18 +52,9 @@ int pgipc_data_plane_init(pgipc_data_plane_t *dp, pgipc_shm_ring_t *ring, int fr
   return 0;
 }
 
-void pgipc_data_plane_set_mode(pgipc_data_plane_t *dp, uint32_t width,
-                               uint32_t height) {
-  /* this is a deliberately lock-free, best-effort update raced against
-   * the loop thread. */
-  dp->width = width;
-  dp->height = height;
-  if (pgipc_fb_sink_open(dp->sink, width, height) != 0)
-    fprintf(stderr, "[data_plane] sink re-open failed at %ux%u\n", width, height);
-}
 
-void *pgipc_data_plane_run(void *arg) {
-  pgipc_data_plane_t *dp = (pgipc_data_plane_t *)arg;
+void *pgdps_data_plane_run(void *arg) {
+  pgdps_data_plane_t *dp = (pgdps_data_plane_t *)arg;
 
   while (atomic_load(&dp->running)) {
     struct epoll_event events[2];
@@ -96,17 +87,17 @@ void *pgipc_data_plane_run(void *arg) {
     if (!have_frame_signal)
       continue; /* woken only by a kick; nothing new to render yet */
 
-    int idx = pgipc_shm_ring_checkout(dp->ring);
+    int idx = pgdps_shm_ring_checkout(dp->ring);
     if (idx < 0) {
-      /* Spurious wake: the writer that posted was evicted (or otherwise
+      /* Spurious wake: the client that posted was evicted (or otherwise
        * stopped publishing) before we got here. Nothing to render. */
       atomic_fetch_add(&dp->stats.frames_dropped, 1);
       continue;
     }
 
     /* Safe to read only now that checkout() holds reader_locked == idx;
-     * a writers publish already does a generation check which guarantees
-     * an evicted writer's frame stop landing in the ring, so this frame
+     * a clients publish already does a generation check which guarantees
+     * an evicted client's frame stop landing in the ring, so this frame
      * is legal */
     uint64_t frame_id = dp->ring->frame_id[idx];
     uint64_t write_ts_ns = dp->ring->write_ts_ns[idx];
@@ -115,13 +106,13 @@ void *pgipc_data_plane_run(void *arg) {
     uint32_t width = dp->width;
     uint32_t height = dp->height;
 
-    int rc = pgipc_fb_sink_blit(dp->sink, pixels, width, height, frame_id);
+    int rc = pgdps_fb_sink_blit(dp->sink, pixels, width, height, frame_id);
 
     struct timespec now;
     clock_gettime(CLOCK_MONOTONIC, &now);
     uint64_t now_ns = ((uint64_t)now.tv_sec * 1000000000ULL) + now.tv_nsec;
 
-    pgipc_shm_ring_release(dp->ring);
+    pgdps_shm_ring_release(dp->ring);
 
     if (rc != 0) {
       atomic_fetch_add(&dp->stats.blit_errors, 1);
@@ -135,7 +126,24 @@ void *pgipc_data_plane_run(void *arg) {
   return NULL;
 }
 
-void pgipc_data_plane_kick(pgipc_data_plane_t *dp) {
+void pgdps_data_plane_stop(pgdps_data_plane_t *dp) {
+  atomic_store(&dp->running, false);
+  pgdps_data_plane_kick(dp); /* unblock an epoll_wait() the loop may be parked in */
+}
+
+
+void pgdps_data_plane_set_mode(pgdps_data_plane_t *dp, uint32_t width,
+                               uint32_t height) {
+  /* this is a deliberately lock-free, best-effort update raced against
+   * the loop thread. */
+  dp->width = width;
+  dp->height = height;
+  if (pgdps_fb_sink_open(dp->sink, width, height) != 0)
+    fprintf(stderr, "[data_plane] sink re-open failed at %ux%u\n", width, height);
+}
+
+
+void pgdps_data_plane_kick(pgdps_data_plane_t *dp) {
   uint64_t v = 1;
   ssize_t n;
   do {
@@ -143,7 +151,3 @@ void pgipc_data_plane_kick(pgipc_data_plane_t *dp) {
   } while (n < 0 && errno == EINTR);
 }
 
-void pgipc_data_plane_stop(pgipc_data_plane_t *dp) {
-  atomic_store(&dp->running, false);
-  pgipc_data_plane_kick(dp); /* unblock an epoll_wait() the loop may be parked in */
-}

@@ -1,5 +1,5 @@
 // control_query.c - see control_query.h.
-#define LIBPGIPC_READER
+#define LIBPGDP_SERVER
 #include "control_query.h"
 
 #include <errno.h>
@@ -7,7 +7,7 @@
 #include <stdio.h>
 #include <unistd.h>
 
-int pgipc_control_query_channel_init(pgipc_control_query_channel_t *chan) {
+int pgdps_control_query_channel_init(pgdps_control_query_channel_t *chan) {
   int fds[2];
   if (pipe(fds) != 0) {
     perror("pipe (control_query channel)");
@@ -27,7 +27,7 @@ int pgipc_control_query_channel_init(pgipc_control_query_channel_t *chan) {
   return 0;
 }
 
-void pgipc_control_query_channel_close(pgipc_control_query_channel_t *chan) {
+void pgdps_control_query_channel_close(pgdps_control_query_channel_t *chan) {
   if (chan->wake_read_fd >= 0)
     close(chan->wake_read_fd);
   if (chan->wake_write_fd >= 0)
@@ -38,8 +38,8 @@ void pgipc_control_query_channel_close(pgipc_control_query_channel_t *chan) {
   pthread_mutex_destroy(&chan->queue_lock);
 }
 
-void pgipc_control_query_submit(pgipc_control_query_channel_t *chan,
-                                pgipc_control_query_t *query) {
+void pgdps_control_query_submit(pgdps_control_query_channel_t *chan,
+                                pgdps_control_query_t *query) {
   unsigned char byte = 1;
   ssize_t n;
 
@@ -64,12 +64,12 @@ void pgipc_control_query_submit(pgipc_control_query_channel_t *chan,
   pthread_cond_destroy(&query->done_cond);
 }
 
-int pgipc_control_query_channel_wake_fd(pgipc_control_query_channel_t *chan) {
+int pgdps_control_query_channel_wake_fd(pgdps_control_query_channel_t *chan) {
   return chan->wake_read_fd;
 }
 
-pgipc_control_query_t *
-pgipc_control_query_channel_drain(pgipc_control_query_channel_t *chan) {
+pgdps_control_query_t *
+pgdps_control_query_channel_drain(pgdps_control_query_channel_t *chan) {
   unsigned char byte;
   ssize_t n;
 
@@ -80,14 +80,14 @@ pgipc_control_query_channel_drain(pgipc_control_query_channel_t *chan) {
   // fall through and return whatever is pending (may legitimately be NULL).
 
   pthread_mutex_lock(&chan->queue_lock);
-  pgipc_control_query_t *query = chan->pending;
+  pgdps_control_query_t *query = chan->pending;
   chan->pending = NULL;
   pthread_mutex_unlock(&chan->queue_lock);
 
   return query;
 }
 
-void pgipc_control_query_complete(pgipc_control_query_t *query) {
+void pgdps_control_query_complete(pgdps_control_query_t *query) {
   pthread_mutex_lock(&query->lock);
   query->done = true;
   pthread_cond_signal(&query->done_cond);

@@ -1,5 +1,5 @@
 // admin_plane.c - see admin_plane.h.
-#define LIBPGIPC_READER
+#define LIBPGDP_SERVER
 #include "admin_plane.h"
 
 #include <errno.h>
@@ -10,13 +10,37 @@
 #include <sys/un.h>
 #include <unistd.h>
 
-// Generous fixed buffer: the largest admin payload today is pgipc_admin_list_response_t
-// (PGIPC_ADMIN_MAX_CLIENTS entries), well under 4KiB. Revisit if
-// PGIPC_ADMIN_MAX_CLIENTS grows a lot.
-#define PGIPC_ADMIN_RECV_BUF_SIZE 4096
+/**
+ * PGDSP_ADMIN_RECV_BUF_SIZE - max size of an admin message
+ *
+ * Generous fixed buffer: the largest admin payload today is pgdps_admin_list_response_t
+ * (PGDPS_ADMIN_MAX_CLIENTS entries), well under 4KiB. Revisit if
+ * PGDPS_ADMIN_MAX_CLIENTS grows a lot.
+ */
+#define PGDPS_ADMIN_RECV_BUF_SIZE 4096
 
-int pgipc_admin_plane_init(pgipc_admin_plane_t *ap,
-                           pgipc_control_query_channel_t *chan) {
+/**
+ * handle_list() - LIST_REQUEST -> a filled query -> response. 
+ */
+static void handle_list(pgdps_admin_plane_t *ap, int client_fd);
+
+/**
+ * handle_switch() - SWITCH_REQUEST -> a filled query -> response.
+ */
+static void handle_switch(pgdps_admin_plane_t *ap, int client_fd,
+                          const pgdps_admin_switch_request_t *req);
+
+/**
+ * handle_connection() - one connect->request->response->close cycle.
+ *
+ * Never crashes on malformed input. An unrecognized/oversized/short message just closes
+ * the connection with no reply, exactly like the producer control protocol's own
+ * malformed- input stance.
+ */
+static void handle_connection(pgdps_admin_plane_t *ap, int client_fd);
+
+int pgdps_admin_plane_init(pgdps_admin_plane_t *ap,
+                           pgdps_control_query_channel_t *chan) {
   ap->chan = chan;
   atomic_store(&ap->running, true);
 
@@ -39,9 +63,9 @@ int pgipc_admin_plane_init(pgipc_admin_plane_t *ap,
   struct sockaddr_un addr;
   memset(&addr, 0, sizeof(addr));
   addr.sun_family = AF_UNIX;
-  strncpy(addr.sun_path, PGIPC_ADMIN_SOCK_PATH, sizeof(addr.sun_path) - 1);
+  strncpy(addr.sun_path, PGDPS_ADMIN_SOCK_PATH, sizeof(addr.sun_path) - 1);
 
-  unlink(PGIPC_ADMIN_SOCK_PATH); // stale socket from a previous run
+  unlink(PGDPS_ADMIN_SOCK_PATH); // stale socket from a previous run
 
   if (bind(ap->listen_fd, (struct sockaddr *)&addr, sizeof(addr)) != 0) {
     perror("bind (admin plane)");
@@ -64,79 +88,8 @@ int pgipc_admin_plane_init(pgipc_admin_plane_t *ap,
   return 0;
 }
 
-/** pgipc__admin_handle_list() - LIST_REQUEST -> a filled query -> response. */
-static void pgipc__admin_handle_list(pgipc_admin_plane_t *ap, int client_fd) {
-  pgipc_control_query_t query;
-
-  memset(&query, 0, sizeof(query));
-  query.type = PGIPC_CTRL_QUERY_LIST;
-
-  pgipc_control_query_submit(ap->chan, &query);
-
-  pgipc_ctrl_send(client_fd, (pgipc_msg_type_t)PGIPC_ADMIN_MSG_LIST_RESPONSE,
-                  &query.list_response, sizeof(query.list_response));
-}
-
-/** pgipc__admin_handle_switch() - SWITCH_REQUEST -> a filled query -> response. */
-static void pgipc__admin_handle_switch(pgipc_admin_plane_t *ap, int client_fd,
-                                       const pgipc_admin_switch_request_t *req) {
-  pgipc_control_query_t query;
-  memset(&query, 0, sizeof(query));
-  query.type = PGIPC_CTRL_QUERY_SWITCH;
-  strncpy(query.switch_app_id, req->app_id, PGIPC_APP_ID_LEN - 1);
-
-  pgipc_control_query_submit(ap->chan, &query);
-
-  pgipc_ctrl_send(client_fd, (pgipc_msg_type_t)PGIPC_ADMIN_MSG_SWITCH_RESPONSE,
-                  &query.switch_response, sizeof(query.switch_response));
-}
-
-/** pgipc__admin_handle_connection() - one connect->request->response->close cycle.
- *
- * Never crashes on malformed input. An unrecognized/oversized/short message just closes
- * the connection with no reply, exactly like the producer control protocol's own
- * malformed- input stance. 
- */
-static void pgipc__admin_handle_connection(pgipc_admin_plane_t *ap, int client_fd) {
-  unsigned char buf[PGIPC_ADMIN_RECV_BUF_SIZE];
-  pgipc_msg_type_t type;
-  uint32_t len;
-
-  int rc = pgipc_ctrl_recv(client_fd, &type, buf, sizeof(buf), &len);
-  if (rc != 0) {
-    if (rc == -2)
-      fprintf(stderr, "[pgipc-admin] oversized request, dropping connection\n");
-    close(client_fd);
-    return;
-  }
-
-  switch ((pgipc_admin_msg_type_t)type) {
-  case PGIPC_ADMIN_MSG_LIST_REQUEST:
-    pgipc__admin_handle_list(ap, client_fd);
-    break;
-
-  case PGIPC_ADMIN_MSG_SWITCH_REQUEST: {
-    if (len != sizeof(pgipc_admin_switch_request_t)) {
-      fprintf(stderr, "[pgipc-admin] malformed SWITCH_REQUEST (len=%u)\n", len);
-      break;
-    }
-    pgipc_admin_switch_request_t req;
-    memcpy(&req, buf, sizeof(req));
-    req.app_id[PGIPC_APP_ID_LEN - 1] = '\0'; // never trust the wire's NUL
-    pgipc__admin_handle_switch(ap, client_fd, &req);
-    break;
-  }
-
-  default:
-    fprintf(stderr, "[pgipc-admin] unrecognized admin message type %d\n", (int)type);
-    break;
-  }
-
-  close(client_fd);
-}
-
-void *pgipc_admin_plane_run(void *arg) {
-  pgipc_admin_plane_t *ap = (pgipc_admin_plane_t *)arg;
+void *pgdps_admin_plane_run(void *arg) {
+  pgdps_admin_plane_t *ap = (pgdps_admin_plane_t *)arg;
 
   struct pollfd pfds[2];
   pfds[0].fd = ap->listen_fd;
@@ -154,7 +107,7 @@ void *pgipc_admin_plane_run(void *arg) {
     }
 
     if (pfds[1].revents & POLLIN)
-      break; // pgipc_admin_plane_stop() was called
+      break; // pgdps_admin_plane_stop() was called
 
     if (!(pfds[0].revents & POLLIN))
       continue;
@@ -167,13 +120,13 @@ void *pgipc_admin_plane_run(void *arg) {
       continue;
     }
 
-    pgipc__admin_handle_connection(ap, client_fd);
+    handle_connection(ap, client_fd);
   }
 
   return NULL;
 }
 
-void pgipc_admin_plane_stop(pgipc_admin_plane_t *ap) {
+void pgdps_admin_plane_stop(pgdps_admin_plane_t *ap) {
   atomic_store(&ap->running, false);
   unsigned char byte = 1;
   ssize_t n;
@@ -182,7 +135,7 @@ void pgipc_admin_plane_stop(pgipc_admin_plane_t *ap) {
   } while (n < 0 && errno == EINTR);
 }
 
-void pgipc_admin_plane_close(pgipc_admin_plane_t *ap) {
+void pgdps_admin_plane_close(pgdps_admin_plane_t *ap) {
   if (ap->listen_fd >= 0)
     close(ap->listen_fd);
   if (ap->stop_read_fd >= 0)
@@ -192,5 +145,68 @@ void pgipc_admin_plane_close(pgipc_admin_plane_t *ap) {
   ap->listen_fd = -1;
   ap->stop_read_fd = -1;
   ap->stop_write_fd = -1;
-  unlink(PGIPC_ADMIN_SOCK_PATH);
+  unlink(PGDPS_ADMIN_SOCK_PATH);
+}
+
+static void handle_list(pgdps_admin_plane_t *ap, int client_fd) {
+  pgdps_control_query_t query;
+
+  memset(&query, 0, sizeof(query));
+  query.type = PGDPS_CTRL_QUERY_LIST;
+
+  pgdps_control_query_submit(ap->chan, &query);
+
+  pgdp_ctrl_send(client_fd, (pgdp_msg_type_t)PGDPS_ADMIN_MSG_LIST_RESPONSE,
+                  &query.list_response, sizeof(query.list_response));
+}
+
+static void handle_switch(pgdps_admin_plane_t *ap, int client_fd,
+                          const pgdps_admin_switch_request_t *req) {
+  pgdps_control_query_t query;
+  memset(&query, 0, sizeof(query));
+  query.type = PGDPS_CTRL_QUERY_SWITCH;
+  strncpy(query.switch_client_id, req->client_id, PGDP_CLIENT_ID_LEN - 1);
+
+  pgdps_control_query_submit(ap->chan, &query);
+
+  pgdp_ctrl_send(client_fd, (pgdp_msg_type_t)PGDPS_ADMIN_MSG_SWITCH_RESPONSE,
+                  &query.switch_response, sizeof(query.switch_response));
+}
+
+static void handle_connection(pgdps_admin_plane_t *ap, int client_fd) {
+  unsigned char buf[PGDPS_ADMIN_RECV_BUF_SIZE];
+  pgdp_msg_type_t type;
+  uint32_t len;
+
+  int rc = pgdp_ctrl_recv(client_fd, &type, buf, sizeof(buf), &len);
+  if (rc != 0) {
+    if (rc == -2)
+      fprintf(stderr, "[pgipc-admin] oversized request, dropping connection\n");
+    close(client_fd);
+    return;
+  }
+
+  switch ((pgdps_admin_msg_type_t)type) {
+  case PGDPS_ADMIN_MSG_LIST_REQUEST:
+    handle_list(ap, client_fd);
+    break;
+
+  case PGDPS_ADMIN_MSG_SWITCH_REQUEST: {
+    if (len != sizeof(pgdps_admin_switch_request_t)) {
+      fprintf(stderr, "[pgipc-admin] malformed SWITCH_REQUEST (len=%u)\n", len);
+      break;
+    }
+    pgdps_admin_switch_request_t req;
+    memcpy(&req, buf, sizeof(req));
+    req.client_id[PGDP_CLIENT_ID_LEN - 1] = '\0'; // never trust the wire's NUL
+    handle_switch(ap, client_fd, &req);
+    break;
+  }
+
+  default:
+    fprintf(stderr, "[pgipc-admin] unrecognized admin message type %d\n", (int)type);
+    break;
+  }
+
+  close(client_fd);
 }

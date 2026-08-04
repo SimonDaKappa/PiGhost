@@ -1,7 +1,7 @@
 {
   "configurations": [
     {
-      "name": "display",
+      "name": "server",
       "compileCommands": "${workspaceFolder}/build/compile_commands.json"
     }
   ],
