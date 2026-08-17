@@ -1,73 +1,43 @@
-cmake_minimum_required(VERSION 3.20)
-project(pgdp_server C CXX)
-
-set(CMAKE_C_STANDARD 11)
-set(CMAKE_C_STANDARD_REQUIRED ON)
-set(CMAKE_CXX_STANDARD 23)
-# C++23 is required (not just for gtest itself) because libpgdp.h's public
-# structs use C11 <stdatomic.h> types (atomic_int, atomic_bool, ...) directly
-# as field types. Those typedefs are only made available to C++ translation
-# units via libstdc++'s own <stdatomic.h> compatibility shim, which is
-# itself gated behind __cpp_lib_stdatomic_h (C++23). Under C++17/20 the shim
-# defines nothing and every atomic_* type in the header fails to resolve
-# when the header is included from a .cpp file (e.g. our gtest sources).
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
-
-set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
-
-option(PGDP_BUILD_TESTS
-       "Build unit/integration tests (fetches GoogleTest via CMake FetchContent on first configure -- needs network once, then cached)"
-       ON)
-set(PGDP_SANITIZE
-    ""
-    CACHE STRING "Build with a sanitizer: empty (none) | thread | address")
-
-add_compile_options(-Wall -Wextra)
-add_compile_definitions(_POSIX_C_SOURCE=200809L)
-
-if(PGDP_SANITIZE STREQUAL "thread")
-  message(STATUS "pgipc: building with -fsanitize=thread")
-  add_compile_options(-fsanitize=thread -g -O1)
-  add_link_options(-fsanitize=thread)
-elseif(PGDP_SANITIZE STREQUAL "address")
-  message(STATUS "pgipc: building with -fsanitize=address,undefined")
-  add_compile_options(-fsanitize=address,undefined -g -O1)
-  add_link_options(-fsanitize=address,undefined)
-elseif(NOT PGDP_SANITIZE STREQUAL "")
-  message(FATAL_ERROR "PGDP_SANITIZE must be empty, 'thread', or 'address' (got '${PGDP_SANITIZE}')")
-endif()
+# wisp/server/CMakeLists.txt
+#
+# NOTE: configured as a subdirectory of the top-level wisp/CMakeLists.txt,
+# which sets the C/CXX standards, -Wall -Wextra, WISP_BUILD_TESTS,
+# WISP_SANITIZE, and add_subdirectory(protocol) (providing the wisp_protocol
+# target linked below). Configure from wisp/, not from here directly:
+#   cmake -S wisp -B build && cmake --build build -j
 
 # ---------------------------------------------------------------------------
-# Core server library: every module except the process entrypoint
-# (reader.c) and the libpgdp.h implementation TU, which are kept separate
-# so tests can link the exact same modules reader.c will eventually use.
+# Core server library: every module except the process entrypoint (server.c),
+# kept separate so tests can link the exact same modules server.c uses.
 # ---------------------------------------------------------------------------
-add_library(pgdp_server_core STATIC
-  pgdp_impl.c
-  session/session_table.c
-  dataplane/data_plane.c
-  dataplane/fb_sink_file.c
-  control/control_query.c
-  control/control_plane.c
-  admin/admin_plane.c
+add_library(wisp_server_core STATIC
+  src/session/session_table.c
+  src/dataplane/data_plane.c
+  src/dataplane/fb_sink_file.c
+  src/control/control_query.c
+  src/control/control_plane.c
+  src/admin/admin_plane.c
+  src/shm/server_shm.c
 )
-target_include_directories(pgdp_server_core PUBLIC
-  ${CMAKE_CURRENT_SOURCE_DIR}
-  ${CMAKE_CURRENT_SOURCE_DIR}/../libpgdp
+target_include_directories(wisp_server_core PUBLIC
+  ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 find_package(Threads REQUIRED)
-target_link_libraries(pgdp_server_core PUBLIC Threads::Threads m)
+
+# wisp_protocol (wisp/protocol) is statically linked in, PUBLIC so any server
+# module can #include <wisp/some_proto_header.h> transitively.
+target_link_libraries(wisp_server_core PUBLIC Threads::Threads m wisp_protocol)
 
 # ---------------------------------------------------------------------------
 # The real server binary
 # ---------------------------------------------------------------------------
-add_executable(server server.c)
-target_link_libraries(server PRIVATE pgdp_server_core)
+add_executable(server src/server.c)
+target_link_libraries(server PRIVATE wisp_server_core)
 
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
-if(PGDP_BUILD_TESTS)
+if(WISP_BUILD_TESTS)
   enable_testing()
   add_subdirectory(tests)
 endif()

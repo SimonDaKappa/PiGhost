@@ -1,13 +1,13 @@
 # PiGhost Server/Reader Service - Specification (v1)
 
 This document specifies the behavior of the **server service** (the single
-long-lived "reader" side of libpgdp) so that the CPU pixels-mode
+long-lived "reader" side of libwisp) so that the CPU pixels-mode
 implementation can be built against a fixed contract instead of improvised
 ad hoc. It complements, and must stay consistent with, the doc-comments in
-`libpgdp.h`. Where this spec and the header disagree, the header (the
+`libwisp.h`. Where this spec and the header disagree, the header (the
 actual compiled contract) wins - update this doc.
 
-Scope: this version covers the **PGDP_PAYLOAD_PIXELS** data path in full,
+Scope: this version covers the **WISP_PAYLOAD_PIXELS** data path in full,
 and specifies the dmabuf/GPU control-plane handling needed so the reader
 doesn't have to be revisited when the GPU producer arrives (the *data*-plane
 KMS/DRM scanout code itself is out of scope here - see the GPU app's own
@@ -17,9 +17,9 @@ skeleton doc later).
 
 - Exactly one **server/reader process** runs at a time on the device. It
   owns:
-  - the shm frame ring (`pgdps_shm_ring_create`)
-  - the frame-ready semaphore (`pgdp_shm_sem_create`)
-  - the control-protocol Unix socket (`PGDPS_CONTROL_SOCK_PATH`)
+  - the shm frame ring (`wisps_shm_ring_create`)
+  - the frame-ready semaphore (`wisp_shm_sem_create`)
+  - the control-protocol Unix socket (`WISPS_CONTROL_SOCK_PATH`)
   - a new **admin Unix socket** (see §6) for management-plane queries
   - the physical HDMI output (framebuffer console or DRM/KMS in later
     iterations; this spec's v1 reference implementation targets a
@@ -32,14 +32,14 @@ skeleton doc later).
 1. Server creates the shm ring, semaphore, control socket, and admin
    socket, in that order, before accepting any connections.
 2. Server begins its accept loop on the control socket.
-3. Producers retry-connect (per `pgdpc_connect`'s existing
+3. Producers retry-connect (per `wispc_connect`'s existing
    100-attempt/100ms backoff) until the socket exists.
 
 There is no ordering requirement between admin clients and producers.
 
 ## 3. Client session table
 
-- Fixed-size array, `MAX_CLIENTS = 8` (matches `PGDP_MAX_MODES`-scale
+- Fixed-size array, `MAX_CLIENTS = 8` (matches `WISP_MAX_MODES`-scale
   simplifications elsewhere in the header; revisit if the marketplace ever
   needs more than 8 simultaneously-installed producer apps running at
   once - not the same limit as "how many apps exist", just how many may
@@ -55,15 +55,15 @@ There is no ordering requirement between admin clients and producers.
   |--------------------|----------------------|---------|
   | `in_use`           | bool                 | slot occupied |
   | `fd`                | int                 | control socket fd |
-  | `client_id`           | `char[PGDP_CLIENT_ID_LEN]` | from CONNECT |
+  | `client_id`           | `char[WISP_CLIENT_ID_LEN]` | from CONNECT |
   | `state`            | enum (§4)            | session state machine |
-  | `offered_modes`    | `pgdp_render_mode_t[PGDP_MAX_MODES]` | from CONNECT |
+  | `offered_modes`    | `wisp_render_mode_t[WISP_MAX_MODES]` | from CONNECT |
   | `num_offered_modes`| uint32               | from CONNECT |
-  | `negotiated_mode`  | `pgdp_render_mode_t`| set once MODE accepted |
+  | `negotiated_mode`  | `wisp_render_mode_t`| set once MODE accepted |
   | `granted_generation` | uint32             | copy of ring generation at grant time |
   | `last_heartbeat_monotonic` | `struct timespec` | last HEARTBEAT recv time |
-  | `payload_kind`     | `pgdp_payload_kind_t` | PIXELS until ACKed DMABUF |
-  | `dmabuf_set`       | `pgdps_dmabuf_set_t` | valid only if payload_kind==DMABUF |
+  | `payload_kind`     | `wisp_payload_kind_t` | PIXELS until ACKed DMABUF |
+  | `dmabuf_set`       | `wisps_dmabuf_set_t` | valid only if payload_kind==DMABUF |
 
 - Slot lookup key for admin commands (§6) is `client_id`, not fd/slot index
   - `switch <client_id>` looks up by `client_id` whether the target is
@@ -82,40 +82,40 @@ There is no ordering requirement between admin clients and producers.
    any --(socket EOF / error / BYE-now-DISCONNECT)--> CLOSED (slot freed)
 ```
 
-- **CONNECTED**: socket accepted, no `PGDP_MSG_CONNECT` yet.
+- **CONNECTED**: socket accepted, no `WISP_MSG_CONNECT` yet.
 - **NEGOTIATED**: mode accepted; not currently the active client. May be
   retried into ACTIVE at any time via a later `ACTIVATE_REQUEST` or an
   admin `switch`.
 - **REJECTED**: mode negotiation failed (offered modes don't exactly
   match any server-supported mode, see §5). Server sends
-  `PGDP_MSG_MODE{accepted=0}` then closes the connection - matches
-  `pgdpc_connect`'s behavior of returning NULL on rejection.
+  `WISP_MSG_MODE{accepted=0}` then closes the connection - matches
+  `wispc_connect`'s behavior of returning NULL on rejection.
 - **ACTIVE**: holds the current activation grant; the only client whose
   publishes are considered "real" by data-plane consumers until evicted.
 - **CLOSED**: fd closed, dmabuf set (if any) closed via
-  `pgdps_dmabuf_set_close`, slot freed for reuse by a new connection.
+  `wisps_dmabuf_set_close`, slot freed for reuse by a new connection.
 
 Only one client may be ACTIVE at a time; this is enforced entirely inside
 the server (never inferred from the shm ring alone, matching the header's
-"single active client" arbitration described in `pgdp_msg_type_t`).
+"single active client" arbitration described in `wisp_msg_type_t`).
 
 ## 5. Mode negotiation
 
 - The server is configured (at startup, e.g. via CLI args / a small
   config struct - not over the wire) with a short list of
-  **server-supported modes**, `pgdp_render_mode_t supported[N]`,
-  `N` small (e.g. up to 4, matching `PGDP_MAX_MODES`). This is a real
+  **server-supported modes**, `wisp_render_mode_t supported[N]`,
+  `N` small (e.g. up to 4, matching `WISP_MAX_MODES`). This is a real
   list, not a single fixed mode - see the confirmed decision to support
   exact-match against a small configurable list (e.g. multiple refresh
   rates at the same fixed panel resolution).
-- On `PGDP_MSG_CONNECT`, the server walks the producer's
+- On `WISP_MSG_CONNECT`, the server walks the producer's
   `offered_modes` **in the producer's preference order**, and picks the
   **first** one that exactly matches (width, height, fps all equal) any
   entry in `supported`. First match wins; there is no scoring/distance
   metric.
 - If no offered mode exactly matches any supported mode, reply
-  `PGDP_MSG_MODE{accepted=0}` and close (client → REJECTED → CLOSED).
-- `PGDP_FRAME_MAX_WIDTH` / `PGDP_FRAME_MAX_HEIGHT` in the header bound
+  `WISP_MSG_MODE{accepted=0}` and close (client → REJECTED → CLOSED).
+- `WISP_FRAME_MAX_WIDTH` / `WISP_FRAME_MAX_HEIGHT` in the header bound
   the shm ring's fixed buffer allocation; every entry in `supported` MUST
   fit within those bounds (server-side static assertion / startup check,
   not a wire-protocol check - a producer never sees this constant, it's
@@ -128,30 +128,30 @@ control socket, so producer apps never need to link against or even know
 about admin semantics:
 
 ```
-#define PGDPS_ADMIN_SOCK_PATH "/dev/shm/frame_ring_admin.sock"
+#define WISPS_ADMIN_SOCK_PATH "/dev/shm/frame_ring_admin.sock"
 ```
 
 ### 6.1 Transport & framing
 
 - Same length-prefixed framing style as the control protocol
   (1-byte type + 4-byte BE length + payload), but a **separate, smaller
-  message enum** (`pgdps_admin_msg_type_t`) - admin messages must never be
+  message enum** (`wisps_admin_msg_type_t`) - admin messages must never be
   confusable with producer control messages even though they reuse
-  `pgdps_ctrl_send`/`pgdps_ctrl_recv` framing helpers over a different fd.
+  `wisps_ctrl_send`/`wisps_ctrl_recv` framing helpers over a different fd.
 - Every admin connection is short-lived: connect → send one request →
   receive one response → close. No persistent admin session state, no
   heartbeats. This keeps the orchestrator's HTTP-sidecar translation
-  (`GET /status` → `PGDPS_ADMIN_MSG_LIST_REQUEST`, `POST /switch` →
-  `PGDPS_ADMIN_MSG_SWITCH_REQUEST`) trivial later.
+  (`GET /status` → `WISPS_ADMIN_MSG_LIST_REQUEST`, `POST /switch` →
+  `WISPS_ADMIN_MSG_SWITCH_REQUEST`) trivial later.
 
 ### 6.2 Messages
 
 | type | direction | payload | purpose |
 |------|-----------|---------|---------|
-| `PGDPS_ADMIN_MSG_LIST_REQUEST` | client→display | none | ask for session table snapshot |
-| `PGDPS_ADMIN_MSG_LIST_RESPONSE` | display→client | array of `{client_id, state, negotiated_mode, payload_kind}`, up to `MAX_CLIENTS` entries | snapshot reply |
-| `PGDPS_ADMIN_MSG_SWITCH_REQUEST` | client→display | `{client_id}` | request activation switch to `client_id` |
-| `PGDPS_ADMIN_MSG_SWITCH_RESPONSE` | display→client | `{ok, reason}` | switch outcome |
+| `WISPS_ADMIN_MSG_LIST_REQUEST` | client→display | none | ask for session table snapshot |
+| `WISPS_ADMIN_MSG_LIST_RESPONSE` | display→client | array of `{client_id, state, negotiated_mode, payload_kind}`, up to `MAX_CLIENTS` entries | snapshot reply |
+| `WISPS_ADMIN_MSG_SWITCH_REQUEST` | client→display | `{client_id}` | request activation switch to `client_id` |
+| `WISPS_ADMIN_MSG_SWITCH_RESPONSE` | display→client | `{ok, reason}` | switch outcome |
 
 ### 6.3 Switch semantics
 
@@ -180,9 +180,9 @@ deferring it again.
 
 ## 7. Activation & eviction
 
-- **Granting**: on `PGDP_MSG_ACTIVATE_REQUEST` from a NEGOTIATED client:
+- **Granting**: on `WISP_MSG_ACTIVATE_REQUEST` from a NEGOTIATED client:
   - Regardless of whether anyone was previously ACTIVE, the server calls
-    `pgdps_evict_client(ring)` immediately before every grant (including
+    `wisps_evict_client(ring)` immediately before every grant (including
     the very first grant ever, off generation 0). This is a deliberate
     simplification: it costs nothing (bumping 0→1 and resetting an
     already-`-1` `latest_ready` is a no-op in the empty-slate case) and
@@ -196,23 +196,23 @@ deferring it again.
     eviction steps 2/3/4 below) as part of the same generation bump, then
     grant - this is what makes admin `switch` (§6.3) a single atomic
     generation increment rather than two.
-  - if a different client is ACTIVE: send `PGDP_MSG_ACTIVATE_DENY{reason}`
+  - if a different client is ACTIVE: send `WISP_MSG_ACTIVATE_DENY{reason}`
     to the requester; requester stays NEGOTIATED and retries per its own
-    `PGDPC_RETRY_ACTIVATE_MS` (2000ms, entirely producer-side, per
-    `pgdpc_ctx_t` doc-comment - server does not need to schedule
+    `WISPC_RETRY_ACTIVATE_MS` (2000ms, entirely producer-side, per
+    `wispc_ctx_t` doc-comment - server does not need to schedule
     retries).
   - First-come-first-served: no priority field, no preemption by a later
     request - matches the confirmed decision.
 - **Eviction** (server-initiated, via admin switch, heartbeat timeout, or
   disconnect of the active client):
-  1. Call `pgdps_evict_client(ring)` - bumps generation, resets
+  1. Call `wisps_evict_client(ring)` - bumps generation, resets
      `latest_ready = -1`.
   2. If the evicted client's socket is still open (i.e. this is a
      heartbeat-timeout or admin-switch eviction, not a disconnect), send
-     it `PGDP_MSG_DEACTIVATE`. A disconnect obviously has nothing to send
+     it `WISP_MSG_DEACTIVATE`. A disconnect obviously has nothing to send
      to.
   3. If the evicted client was in DMABUF payload mode, do **not** call
-     `pgdps_dmabuf_set_close()` yet if the server is mid-flip away from
+     `wisps_dmabuf_set_close()` yet if the server is mid-flip away from
      its buffer - see the header's explicit ordering note ("never scan
      out a buffer you are about to release"). For the CPU pixels path
      this ordering concern doesn't apply (no scanout buffer ownership),
@@ -224,11 +224,11 @@ deferring it again.
      `switch` is one generation increment, not two.
 - **Heartbeat timeout**: server tracks `last_heartbeat_monotonic` per
   ACTIVE client only (NEGOTIATED clients don't heartbeat - see
-  `pgdpc_ctx_t`'s ctrl thread, which only sends HEARTBEAT while
-  `active==true`). If `now - last_heartbeat_monotonic > PGDPS_HEARTBEAT_TIMEOUT_MS`
-  (2000ms, `2 * PGDPC_HEARTBEAT_INTERVAL_MS`, chosen to tolerate one dropped
-  heartbeat; both constants are declared unconditionally in libpgdp.h so a
-  LIBPGDP_SERVER-only build can reference them), evict per above.
+  `wispc_ctx_t`'s ctrl thread, which only sends HEARTBEAT while
+  `active==true`). If `now - last_heartbeat_monotonic > WISPS_HEARTBEAT_TIMEOUT_MS`
+  (2000ms, `2 * WISPC_HEARTBEAT_INTERVAL_MS`, chosen to tolerate one dropped
+  heartbeat; both constants are declared unconditionally in libwisp.h so a
+  LIBWISP_SERVER-only build can reference them), evict per above.
 - **Disconnect detection**: server's poll/select loop watches every
   connected fd for `POLLHUP`/read-returns-0/read-error. On detection of
   the ACTIVE client's disconnect, evict immediately (no need to wait for
@@ -237,17 +237,17 @@ deferring it again.
 
 ## 8. Where the admin protocol lives (code organization)
 
-`libpgdp.h`'s documented scope is the **producer↔display** contract only
+`libwisp.h`'s documented scope is the **producer↔display** contract only
 (see its header comment: "client convenience API" + "control protocol").
 The admin protocol in §6 is server-internal management surface that no
-producer ever links against, so it does NOT belong in `libpgdp.h` - it
+producer ever links against, so it does NOT belong in `libwisp.h` - it
 gets its own small header, `server/admin/admin_proto.h`, defining
-`pgdps_admin_msg_type_t` and the two payload structs, reusing
-`pgdps_ctrl_send`/`pgdps_ctrl_recv` from libpgdp.h for framing (those two
-functions are intentionally unconditional/always-declared in libpgdp.h
-regardless of `LIBPGDP_CLIENT`/`LIBPGDP_SERVER`, so this reuse is free).
-A future admin CLI/PWA-sidecar includes `admin_proto.h` + links libpgdp
-with neither `LIBPGDP_CLIENT` nor `LIBPGDP_SERVER` defined for producer
+`wisps_admin_msg_type_t` and the two payload structs, reusing
+`wisps_ctrl_send`/`wisps_ctrl_recv` from libwisp.h for framing (those two
+functions are intentionally unconditional/always-declared in libwisp.h
+regardless of `LIBWISP_CLIENT`/`LIBWISP_SERVER`, so this reuse is free).
+A future admin CLI/PWA-sidecar includes `admin_proto.h` + links libwisp
+with neither `LIBWISP_CLIENT` nor `LIBWISP_SERVER` defined for producer
 data-plane symbols it doesn't need (or just uses raw sockets directly,
 since the protocol is deliberately tiny).
 
@@ -258,27 +258,27 @@ separate from the control-socket accept/event loop:
 
 1. `sem_wait(fsem)` - blocks until a client publishes (any client; the
    semaphore has no notion of *which* client posted).
-2. `idx = pgdps_shm_ring_checkout(ring)`. If `idx < 0`, spurious wake
+2. `idx = wisps_shm_ring_checkout(ring)`. If `idx < 0`, spurious wake
    (e.g. semaphore posted by a client that was evicted between publish
    and this checkout) - loop back to step 1.
 3. **Read-after-checkout ordering**: read `ring->frame_id[idx]` /
    `ring->write_ts[idx]` only after checkout, never before - checkout is
    what makes the read of that slot's contents race-free against a client
    reusing it (clients never pick a `reader_locked` slot, per
-   `pgdpc_write_slot`). The reader loop does not need its
-   own generation check: `pgdpc_publish`'s own generation
+   `wispc_write_slot`). The reader loop does not need its
+   own generation check: `wispc_publish`'s own generation
    comparison already guarantees an evicted client's frames stop landing
    in the ring, so by the time this loop's `sem_wait` wakes, any frame it
    checks out was legitimately published by whoever held the grant at
    publish time.
 4. Blit `ring->frame_bufs[idx]` (exactly
-   `negotiated_mode.width * negotiated_mode.height * PGDP_BYTES_PER_PIXEL`
+   `negotiated_mode.width * negotiated_mode.height * WISP_BYTES_PER_PIXEL`
    bytes - the negotiated mode may be smaller than
-   `PGDP_FRAME_MAX_WIDTH`×`PGDP_FRAME_MAX_HEIGHT`, the ring's
+   `WISP_FRAME_MAX_WIDTH`×`WISP_FRAME_MAX_HEIGHT`, the ring's
    allocation ceiling, so the blit range comes from the ACTIVE client's
    `negotiated_mode`, not the ring's max size) to `/dev/fb0` (or the
    active KMS front buffer in a later DRM-based version).
-5. `pgdps_shm_ring_release(ring)`.
+5. `wisps_shm_ring_release(ring)`.
 6. Update fps/latency counters (`now - ring->write_ts[idx]`) for
    diagnostics/admin LIST responses.
 7. Loop to step 1.
@@ -288,7 +288,7 @@ enforces single-client safety structurally (`latest_ready`/
 `reader_locked`), and the *control*-plane's job (§7) is solely to ensure
 only one producer process is ever alive-and-publishing at a time. If two
 producers somehow publish concurrently (a control-plane bug), this loop
-would still render blindly, which is why `pgdpc_publish`'s
+would still render blindly, which is why `wispc_publish`'s
 generation check (drop-if-stale) is the real safety net - a defense the
 reader-side loop is not exempt from watching in step 3.
 
@@ -319,8 +319,8 @@ plan):
 
 ## 11. Error handling & edge cases
 
-- **Malformed CONNECT** (`num_modes` outside `1..PGDP_MAX_MODES`, or
-  `client_id` not NUL-terminated within `PGDP_CLIENT_ID_LEN`): treat as
+- **Malformed CONNECT** (`num_modes` outside `1..WISP_MAX_MODES`, or
+  `client_id` not NUL-terminated within `WISP_CLIENT_ID_LEN`): treat as
   REJECTED - respond `MODE{accepted=0}` and close. Do not crash the
   server process on any malformed input from a producer; producers are
   third-party marketplace code and must be treated as adversarial input
@@ -330,14 +330,14 @@ plan):
   is not a uniqueness key at the protocol level in v1. (Revisit if the
   marketplace's process-management guarantees "one instance per client_id"
   make this unreachable in practice; until then, don't assume it.)
-- **`pgdps_ctrl_recv`/`_fds` returning -2 (oversized message)**: log and
+- **`wisps_ctrl_recv`/`_fds` returning -2 (oversized message)**: log and
   drop the individual message, keep the connection open - a single
   malformed frame should not tear down an otherwise-healthy session
   (matches the producer ctrl thread's own `rc == -2: continue` handling).
 - **DMABUF import failure** (`drmPrimeFDToHandle`/`AddFB2` fails on the
   server's KMS/DRM side - out of scope to implement in v1, but the
   control-plane response is in scope): reply
-  `PGDP_MSG_DMABUF_ACK{accepted=0, reason}`; session stays in PIXELS
+  `WISP_MSG_DMABUF_ACK{accepted=0, reason}`; session stays in PIXELS
   payload mode; do not evict/deactivate the client over this - a GPU
   producer's fallback to `glReadPixels`-into-shm (mentioned in the header)
   is entirely its own decision to make, not the server's to force.
@@ -367,7 +367,7 @@ plan):
 
 ## 13. Open items for a future revision
 
-- Whether `PGDPS_ADMIN_MSG_SWITCH_REQUEST` should support a "queued"
+- Whether `WISPS_ADMIN_MSG_SWITCH_REQUEST` should support a "queued"
   grant for an client_id that hasn't connected yet (§6.3) once the
   orchestrator's real start/poll/switch sequencing is built and its
   actual latency is measured.
@@ -381,26 +381,26 @@ The service is built with CMake (no more hand-written Makefile). From
 `server/`:
 
 ```sh
-cmake -S . -B build -DPGDP_BUILD_TESTS=ON
+cmake -S . -B build -DWISP_BUILD_TESTS=ON
 cmake --build build -j$(nproc)
 ctest --test-dir build --output-on-failure
 ```
 
-- `PGDP_BUILD_TESTS` (default `ON`) fetches GoogleTest via CMake
+- `WISP_BUILD_TESTS` (default `ON`) fetches GoogleTest via CMake
   `FetchContent` on first configure (needs network once; cached under
   `build/_deps` afterwards) and builds two test binaries:
-  - `pgdp_unit_tests` - pure logic, no threads/sockets/shm
+  - `wisp_unit_tests` - pure logic, no threads/sockets/shm
     (`tests/unit/`). Fast, safe to run on every change.
-  - `pgdp_integration_tests` - real threads, real POSIX shm/semaphores/
+  - `wisp_integration_tests` - real threads, real POSIX shm/semaphores/
     Unix sockets (`tests/integration/`). Each test binds fixed,
-    well-known resource names (the shm ring, `PGDPS_ADMIN_SOCK_PATH`), so
+    well-known resource names (the shm ring, `WISPS_ADMIN_SOCK_PATH`), so
     all integration tests are registered `RUN_SERIAL TRUE` under ctest -
     they must never run concurrently with each other or with a second
     copy of themselves.
-- `PGDP_SANITIZE` (cache var, default `""`) can be set to `thread` or
+- `WISP_SANITIZE` (cache var, default `""`) can be set to `thread` or
   `address` to add `-fsanitize=...` project-wide, e.g.:
   ```sh
-  cmake -S . -B build-tsan -DPGDP_BUILD_TESTS=ON -DPGDP_SANITIZE=thread
+  cmake -S . -B build-tsan -DWISP_BUILD_TESTS=ON -DWISP_SANITIZE=thread
   cmake --build build-tsan -j$(nproc)
   ctest --test-dir build-tsan --output-on-failure
   ```
@@ -415,9 +415,9 @@ ctest --test-dir build --output-on-failure
   ctest --test-dir build-tsan -R integration --repeat-until-fail 20 --output-on-failure
   ```
 - Requires **C++23** for the test binaries specifically (`CMakeLists.txt`
-  sets `CMAKE_CXX_STANDARD 23`): `libpgdp.h`'s structs use C11
+  sets `CMAKE_CXX_STANDARD 23`): `libwisp.h`'s structs use C11
   `<stdatomic.h>` types (`atomic_int`, `atomic_bool`, ...) as field types
   directly, and those typedefs are only made visible to C++ translation
   units via libstdc++'s own `<stdatomic.h>` compatibility shim, which is
   itself gated behind `__cpp_lib_stdatomic_h` (C++23). The core library
-  and `pgdp_server` itself remain plain C11.
+  and `wisp_server` itself remain plain C11.
