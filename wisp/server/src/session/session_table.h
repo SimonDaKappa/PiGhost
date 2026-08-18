@@ -104,7 +104,6 @@ typedef struct {
   wisps_dmabuf_set_t dmabuf_set;
 } wisps_session_t;
 
-
 /**
  * struct wisps_session_table_t - fixed array of client sessions
  * @slots: WISPS_SESSION_MAX_CLIENTS entries, in_use marks occupancy
