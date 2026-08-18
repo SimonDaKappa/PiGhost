@@ -1,6 +1,6 @@
 # Overview
 
-The design is __assymetrical__, with 3 parts:
+The design is __asymmetrical__, with 3 parts:
 
 ## Protocol
 
