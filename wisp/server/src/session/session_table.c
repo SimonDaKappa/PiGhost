@@ -51,14 +51,14 @@ void wisps_session_table_activate(wisps_session_table_t *table, int idx,
   if (table->active_slot >= 0 && table->active_slot != idx)
     wisps_session_table_deactivate(table, table->active_slot);
 
-  table->slots[idx].state = WISPS_SESSION_ACTIVE;
+  table->slots[idx].state = WISPS_SESSION_ACTIVE_RT;
   table->slots[idx].granted_generation = generation;
   clock_gettime(CLOCK_MONOTONIC, &table->slots[idx].last_heartbeat_monotonic);
   table->active_slot = idx;
 }
 
 void wisps_session_table_deactivate(wisps_session_table_t *table, int idx) {
-  if (table->slots[idx].state != WISPS_SESSION_ACTIVE)
+  if (table->slots[idx].state != WISPS_SESSION_ACTIVE_RT)
     return;
 
   table->slots[idx].state = WISPS_SESSION_NEGOTIATED;

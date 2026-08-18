@@ -381,8 +381,16 @@ static wisps_admin_client_state_t translate_state(wisps_session_state_t state) {
     return WISPS_ADMIN_STATE_CONNECTED;
   case WISPS_SESSION_NEGOTIATED:
     return WISPS_ADMIN_STATE_NEGOTIATED;
-  case WISPS_SESSION_ACTIVE:
-    return WISPS_ADMIN_STATE_ACTIVE;
+  case WISPS_SESSION_QUEUED:
+    return WISPS_ADMIN_STATE_QUEUED;
+  case WISPS_SESSION_GRANTED_WARMUP:
+    return WISPS_ADMIN_STATE_GRANTED_WARMUP;
+  case WISPS_SESSION_ACTIVE_RT:
+    return WISPS_ADMIN_STATE_ACTIVE_RT;
+  case WISPS_SESSION_EVICTING_COOPERATIVE:
+    return WISPS_ADMIN_STATE_EVICTING_COOPERATIVE;
+  case WISPS_SESSION_EVICTING_FORCED:
+    return WISPS_ADMIN_STATE_EVICTING_FORCED;
   case WISPS_SESSION_REJECTED:
   default:
     return WISPS_ADMIN_STATE_REJECTED;
@@ -419,7 +427,7 @@ static void handle_switch_query(wisps_control_plane_t *cp,
     return;
   }
 
-  if (cp->table.slots[idx].state == WISPS_SESSION_ACTIVE) {
+  if (cp->table.slots[idx].state == WISPS_SESSION_ACTIVE_RT) {
     query->switch_response.ok = 1; // already active: idempotent no-op
     query->switch_response.reason[0] = '\0';
     return;
@@ -455,7 +463,7 @@ static void drain_admin_query(wisps_control_plane_t *cp) {
 static void handle_disconnect(wisps_control_plane_t *cp, int idx) {
   wisps_session_t *slot = &cp->table.slots[idx];
 
-  if (slot->state == WISPS_SESSION_ACTIVE) {
+  if (slot->state == WISPS_SESSION_ACTIVE_RT) {
     wisps_evict_client(cp->ring); // nothing to notify, fd is going away
     if (cp->dp)
       wisps_data_plane_kick(cp->dp);
@@ -512,7 +520,7 @@ static void handle_activate_request(wisps_control_plane_t *cp, int idx) {
 
 static void handle_heartbeat(wisps_control_plane_t *cp, int idx) {
   wisps_session_t *slot = &cp->table.slots[idx];
-  if (slot->state != WISPS_SESSION_ACTIVE)
+  if (slot->state != WISPS_SESSION_ACTIVE_RT)
     return; // NEGOTIATED clients don't heartbeat.
 
   clock_gettime(CLOCK_MONOTONIC, &slot->last_heartbeat_monotonic);

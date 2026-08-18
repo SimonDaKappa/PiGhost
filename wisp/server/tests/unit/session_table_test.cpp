@@ -74,7 +74,7 @@ TEST_F(SessionTableTest, ActivateSetsActiveSlotStateAndGeneration) {
   wisps_session_table_activate(&table_, idx, /*generation=*/1);
 
   EXPECT_EQ(table_.active_slot, idx);
-  EXPECT_EQ(table_.slots[idx].state, WISPS_SESSION_ACTIVE);
+  EXPECT_EQ(table_.slots[idx].state, WISPS_SESSION_ACTIVE_RT);
   EXPECT_EQ(table_.slots[idx].granted_generation, 1u);
 }
 
@@ -90,7 +90,7 @@ TEST_F(SessionTableTest, ActivatingNewSlotDeactivatesPreviousActiveOne) {
   wisps_session_table_activate(&table_, b, /*generation=*/2);
 
   EXPECT_EQ(table_.active_slot, b);
-  EXPECT_EQ(table_.slots[b].state, WISPS_SESSION_ACTIVE);
+  EXPECT_EQ(table_.slots[b].state, WISPS_SESSION_ACTIVE_RT);
   EXPECT_EQ(table_.slots[a].state, WISPS_SESSION_NEGOTIATED)
       << "only one slot may be ACTIVE at a time (SPEC.md §4)";
 }

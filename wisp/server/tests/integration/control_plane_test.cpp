@@ -255,7 +255,7 @@ TEST_F(ControlPlaneTest, AdminListReflectsRealConnectedClient) {
   memcpy(&resp, buf, sizeof(resp));
   ASSERT_EQ(resp.count, 1u);
   EXPECT_STREQ(resp.clients[0].client_id, "sine_wave_cpu");
-  EXPECT_EQ(resp.clients[0].state, WISPS_ADMIN_STATE_ACTIVE);
+  EXPECT_EQ(resp.clients[0].state, WISPS_ADMIN_STATE_ACTIVE_RT);
   EXPECT_EQ(resp.clients[0].negotiated_mode.width, 320u);
 
   close(fd);
