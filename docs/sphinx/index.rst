@@ -1,9 +1,10 @@
-PGIPC Documentation
-====================
+PiGhost Documentation
+=====================
 
 .. toctree::
    :maxdepth: 2
    :caption: Sub-projects:
 
-   libpgdp
-   server
+   wisp_protocol
+   wisp_server
+   wisp_client_sdk

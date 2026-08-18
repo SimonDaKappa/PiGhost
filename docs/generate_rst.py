@@ -7,7 +7,7 @@
 import os
 
 ROOT       = os.path.dirname(os.path.abspath(__file__))
-pg_display  = os.path.abspath(os.path.join(ROOT, '..', 'pg_display'))
+WISP_PATH  = os.path.abspath(os.path.join(ROOT, '..', 'wisp'))
 SPHINX_DIR = os.path.join(ROOT, 'sphinx')
 DOCUMENT_CLIENTS = False
 IGNORED_DIRECTORIES = ["build", "build-tsan"]
@@ -18,7 +18,7 @@ def find_sources(subdir):
         dirs[:] = [d for d in dirs if d not in IGNORED_DIRECTORIES]
         for f in sorted(files):
             if f.endswith(('.c', '.h')):
-                rel = os.path.relpath(os.path.join(dirpath, f), pg_display)
+                rel = os.path.relpath(os.path.join(dirpath, f), WISP_PATH)
                 out.append(rel.replace(os.sep, '/'))
     return sorted(out)
 
@@ -29,29 +29,14 @@ def write_page(path, title, sources):
         fh.writelines(f".. kernel-doc:: {src}\n" for src in sources)
 
 def main():
-    write_page(os.path.join(SPHINX_DIR, 'libpgdp.rst'), 'libpgdp',
-               find_sources(os.path.join(pg_display, 'libpgdp')))
+    write_page(os.path.join(SPHINX_DIR, 'wisp_protocol.rst'), 'Wisp Protocol',
+               find_sources(os.path.join(WISP_PATH, 'protocol')))
 
-    write_page(os.path.join(SPHINX_DIR, 'server.rst'), 'server',
-               find_sources(os.path.join(pg_display, 'server')))
+    write_page(os.path.join(SPHINX_DIR, 'wisp_server.rst'), 'Wisp Server',
+               find_sources(os.path.join(WISP_PATH, 'server')))
 
-    if DOCUMENT_CLIENTS:
-        clients_dir = os.path.join(pg_display, 'clients')
-        clients_sphinx_dir = os.path.join(SPHINX_DIR, 'clients')
-        os.makedirs(clients_sphinx_dir, exist_ok=True)
-
-        names = sorted(d for d in os.listdir(clients_dir)
-                    if os.path.isdir(os.path.join(clients_dir, d)))
-
-        for name in names:
-            write_page(os.path.join(clients_sphinx_dir, f'{name}.rst'), name,
-                    find_sources(os.path.join(clients_dir, name)))
-
-        with open(os.path.join(clients_sphinx_dir, 'index.rst'), 'w') as fh:
-            fh.write("Clients\n=======\n\n.. toctree::\n   :maxdepth: 1\n\n")
-            for name in names:
-                fh.write(f"   {name}\n")
-
+    write_page(os.path.join(SPHINX_DIR, 'wisp_client_sdk.rst'), 'Wisp Client SDK',
+               find_sources(os.path.join(WISP_PATH, 'client_sdk')))
 
 if __name__ == '__main__':
     main()

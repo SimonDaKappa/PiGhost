@@ -30,8 +30,7 @@ typedef struct _wispc_ctx_t wispc_ctx_t;
 
 /**
  * wispc_connect() - establish a client session with the server
- * @client_id:     this client's application id (truncated to WISP_CLIENT_ID_LEN-1
- * bytes)
+ * @client_id:  this client's application id (truncated to WISP_CLIENT_ID_LEN-1 bytes)
  * @modes:      render modes this client supports, in order of preference
  * @num_modes:  number of entries in @modes (truncated to WISP_MAX_MODES)
  *
@@ -44,8 +43,8 @@ typedef struct _wispc_ctx_t wispc_ctx_t;
  * Return: a new session context, or NULL if the control socket could not be reached or
  * the server rejected every offered mode.
  */
-WISPC_API wispc_ctx_t *wispc_connect(const char *client_id, const wisp_render_mode_t *modes,
-                           int num_modes);
+WISPC_API wispc_ctx_t *wispc_connect(const char *client_id,
+                                     const wisp_render_mode_t *modes, int num_modes);
 
 /**
  * wispc_disconnect() - tear down a client session
@@ -87,8 +86,8 @@ WISPC_API wisp_render_mode_t wispc_negotiated_mode(wispc_ctx_t *ctx);
  * DMABUF mode: the returned index is which of your previously-announced dmabufs
  * (wispc_announce_dmabufs()) to target next.
  *
- * @note: calling this again before the previous index has been wispc_publish()'d
- * aborts the process -- a client may hold at most one claimed slot at a time.
+ * Calling this again before the previous index has been wispc_publish()'d aborts the
+ * process; a client may hold at most one claimed slot at a time.
  *
  * Return: a writable buffer index (0..WISP_NUM_BUFFERS-1).
  */

@@ -3,7 +3,7 @@ import sys
 
 DOCS_SPHINX_DIR  = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT     = os.path.abspath(os.path.join(DOCS_SPHINX_DIR, '..', '..'))
-pg_display_DIR    = os.path.join(PROJECT_ROOT, 'pg_display')
+WISP_DIR    = os.path.join(PROJECT_ROOT, 'wisp')
 KDOC_VENDOR_DIR  = os.path.join(PROJECT_ROOT, 'docs', 'kerneldoc-src')
 
 # kerneldoc.py / automarkup.py live right next to this conf.py, but
@@ -17,7 +17,7 @@ sys.path.insert(0, DOCS_SPHINX_DIR)
 # invoked directly without a wrapper script setting it first.
 os.environ.setdefault('srctree', KDOC_VENDOR_DIR)
 
-project   = 'PGIPC'
+project   = 'PiGhost'
 author    = 'Simon Gibson'
 copyright = '2026, Simon Gibson'
 release   = '0.0.1'
@@ -30,7 +30,7 @@ extensions = [
 # Base dir every `.. kernel-doc:: <path>` argument resolves against.
 # This is what lets rst files write clean paths like
 # `display/display_core.c` instead of long absolute paths.
-kerneldoc_srctree = pg_display_DIR
+kerneldoc_srctree = WISP_DIR
 
 # Debug-only: silences/enables kernel-doc's own stderr chatter
 kerneldoc_verbosity = 0
@@ -39,12 +39,12 @@ kerneldoc_verbosity = 0
 # "Invalid C declaration" warnings during the build.
 c_id_attributes = [
     '__packed',
-    'PGDP_DEF',
-    'PGDP_ATOMIC'
+    'WISPC_API',
+    'WISP_ATOMIC'
 ]
 
 c_id_paren_attributes = [
-    'PGDP_ALIGNAS'
+    'WISP_ALIGNAS'
 ]
 
 primary_domain = 'c'
