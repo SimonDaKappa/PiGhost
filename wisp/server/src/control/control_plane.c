@@ -477,6 +477,19 @@ static void handle_connect(wisps_control_plane_t *cp, int idx,
                            const wisp_connect_msg_t *connect) {
   wisps_session_t *slot = &cp->table.slots[idx];
 
+  if (connect->protocol_magic != WISP_PROTOCOL_MAGIC ||
+      connect->protocol_major != WISP_PROTOCOL_VERSION_MAJOR) {
+    wisp_version_mismatch_msg_t mismatch = {
+        .required_magic = WISP_PROTOCOL_MAGIC,
+        .required_major = WISP_PROTOCOL_VERSION_MAJOR,
+    };
+    wisp_ctrl_send(slot->ctrl_fd, WISP_MSG_VERSION_MISMATCH, &mismatch,
+                   sizeof(mismatch));
+    slot->state = WISPS_SESSION_REJECTED;
+    handle_disconnect(cp, idx); // REJECTED -> CLOSED, no mode negotiation attempted
+    return;
+  }
+
   wisp_render_mode_t chosen;
   bool matched = negotiate_mode(cp, connect->modes, connect->num_modes, &chosen);
 
@@ -500,6 +513,9 @@ static void handle_connect(wisps_control_plane_t *cp, int idx,
     slot->offered_modes[i] = connect->modes[i];
 
   slot->negotiated_mode = chosen;
+  slot->negotiated_protocol_minor = connect->protocol_minor < WISP_PROTOCOL_VERSION_MINOR
+                                        ? connect->protocol_minor
+                                        : WISP_PROTOCOL_VERSION_MINOR;
   slot->state = WISPS_SESSION_NEGOTIATED;
 }
 

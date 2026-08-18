@@ -192,6 +192,9 @@ wispc_ctx_t *wispc_connect(const char *client_id, const wisp_render_mode_t *mode
 
   wisp_connect_msg_t connect;
   memset(&connect, 0, sizeof(connect));
+  connect.protocol_magic = WISP_PROTOCOL_MAGIC;
+  connect.protocol_major = WISP_PROTOCOL_VERSION_MAJOR;
+  connect.protocol_minor = WISP_PROTOCOL_VERSION_MINOR;
   strncpy(connect.client_id, ctx->client_id, WISP_CLIENT_ID_LEN - 1);
   connect.num_modes =
       (uint32_t)(num_modes > WISP_MAX_MODES ? WISP_MAX_MODES : num_modes);
@@ -216,6 +219,13 @@ wispc_ctx_t *wispc_connect(const char *client_id, const wisp_render_mode_t *mode
     }
 
     ctx->mode = mode.chosen;
+  } else if (kind == WISP_MSG_VERSION_MISMATCH) {
+    /* Server speaks an incompatible protocol magic/major; rebuild against the
+     * matching wisp_protocol release. No mode negotiation was attempted. */
+    close(fd);
+    pthread_mutex_destroy(&ctx->send_lock);
+    free(ctx);
+    return NULL;
   }
 
   kind = (wisp_msg_kind_t)-1;

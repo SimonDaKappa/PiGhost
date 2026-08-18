@@ -77,6 +77,12 @@ typedef enum {
  * @offered_modes:              modes offered in CONNECT, in preference order
  * @num_offered_modes:          number of valid entries in @offered_modes
  * @negotiated_mode:            set once MODE{accepted=1} is sent
+ * @negotiated_protocol_minor:  min(client's advertised WISP_PROTOCOL_VERSION_MINOR,
+ *                              this server's), set once CONNECT passes the
+ *                              magic/major gate. reserved for the future per-feature
+ *                              capability negotiation where it will let the server skip
+ *                              advertising any feature whose min_minor exceeds what
+ *                              this specific connection agreed to.
  * @granted_generation:         ring generation copied at the moment of grant
  * @last_heartbeat_monotonic:   last HEARTBEAT recv time (ACTIVE_RT clients only)
  * @activate_requested_monotonic: time ACTIVATE_REQUEST was received; valid once
@@ -97,6 +103,7 @@ typedef struct {
   wisp_render_mode_t offered_modes[WISP_MAX_MODES];
   uint32_t num_offered_modes;
   wisp_render_mode_t negotiated_mode;
+  uint32_t negotiated_protocol_minor;
   uint32_t granted_generation;
   struct timespec last_heartbeat_monotonic;
   struct timespec activate_requested_monotonic;

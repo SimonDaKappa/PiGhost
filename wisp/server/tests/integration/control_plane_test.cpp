@@ -120,6 +120,9 @@ FakeProducer *FakeProducerConnect(const char *client_id, const wisp_render_mode_
   }
 
   wisp_connect_msg_t connect_msg{};
+  connect_msg.protocol_magic = WISP_PROTOCOL_MAGIC;
+  connect_msg.protocol_major = WISP_PROTOCOL_VERSION_MAJOR;
+  connect_msg.protocol_minor = WISP_PROTOCOL_VERSION_MINOR;
   strncpy(connect_msg.client_id, client_id, WISP_CLIENT_ID_LEN - 1);
   connect_msg.num_modes =
       static_cast<uint32_t>(num_modes > WISP_MAX_MODES ? WISP_MAX_MODES : num_modes);

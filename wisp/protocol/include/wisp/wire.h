@@ -1,13 +1,15 @@
 #ifndef WISP_WIRE_H
 #define WISP_WIRE_H
 
-#include "types.h"
-#include "utils.h"
 #include <errno.h>
 #include <pthread.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
+
+#include "types.h"
+#include "utils.h"
+#include "version.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -193,6 +195,12 @@ static void wisp_shm_ring_publish_slot(wisp_shm_ring_t *ring, int idx,
 /**
  * enum wisp_msg_kind_t - control protocol message types
  * @WISP_MSG_CONNECT:          client -> server: "here's what I support"
+ * @WISP_MSG_VERSION_MISMATCH: server -> client: "our protocol magic/major versions
+ *                             are incompatible, here's what I require". Sent instead
+ *                             of WISP_MSG_MODE when CONNECT's magic/major fields fail
+ *                             the check; the connection is closed immediately after
+ *                             (no mode negotiation is attempted, since the two sides
+ *                             cannot be trusted to agree on what any message means).
  * @WISP_MSG_MODE:             server -> client: "render at this mode" / reject
  * @WISP_MSG_ACTIVATE_REQUEST: client -> server: "let me be the client"
  * @WISP_MSG_ACTIVATE_GRANT:   server -> client: "you're it, generation N, here's your
@@ -246,19 +254,45 @@ typedef enum {
   WISP_MSG_EVICT_PENDING = 14,
   WISP_MSG_STOPPED = 15,
   WISP_MSG_LIVENESS_TIMEOUT = 16,
+  WISP_MSG_VERSION_MISMATCH = 17,
 } wisp_msg_kind_t;
 
 /**
  * struct wisp_connect_msg_t - WISP_MSG_CONNECT payload
- * @client_id:    client application id
- * @num_modes: number of wisp_render_mode_t entries in @modes
- * @modes:     supported render modes, in order of preference
+ * @protocol_magic: this client's WISP_PROTOCOL_MAGIC; must match the server's exactly
+ * @protocol_major: this client's WISP_PROTOCOL_VERSION_MAJOR; must match the server's
+ *                  exactly
+ * @protocol_minor: this client's WISP_PROTOCOL_VERSION_MINOR; backwards-compatbile soft
+ *                  gate wire additions only.
+ * @client_id:      client application id
+ * @num_modes:      number of wisp_render_mode_t entries in @modes
+ * @modes:          supported render modes, in order of preference
+ *
+ * @protocol_magic/@protocol_major are checked first, before anything else in this
+ * struct is even looked at -- a mismatch on either gets WISP_MSG_VERSION_MISMATCH
+ * back and the connection closed, never a mode negotiation.
  */
 typedef struct {
+  uint32_t protocol_magic;
+  uint32_t protocol_major;
+  uint32_t protocol_minor;
   char client_id[WISP_CLIENT_ID_LEN];
   uint32_t num_modes;
   wisp_render_mode_t modes[WISP_MAX_MODES];
 } wisp_connect_msg_t;
+
+/**
+ * struct wisp_version_mismatch_msg_t - WISP_MSG_VERSION_MISMATCH payload
+ * @required_magic: the server's WISP_PROTOCOL_MAGIC
+ * @required_major: the server's WISP_PROTOCOL_VERSION_MAJOR
+ *
+ * Lets a mismatched client log/report specifically what it needs to be rebuilt
+ * against, rather than just "rejected".
+ */
+typedef struct {
+  uint32_t required_magic;
+  uint32_t required_major;
+} wisp_version_mismatch_msg_t;
 
 /**
  * struct wisp_mode_msg_t - WISP_MSG_MODE payload
