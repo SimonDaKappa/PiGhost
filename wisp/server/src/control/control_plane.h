@@ -47,6 +47,17 @@ extern "C" {
  * @num_supported_modes: number of valid entries in @supported_modes
  *                       (1..WISP_MAX_MODES)
  * @running:             set false by wisps_control_plane_stop()F
+ * @evicting_slot:       slot index currently WISPS_SESSION_EVICTING_COOPERATIVE, or
+ *                       -1 if no eviction is in flight
+ * @pending_grant_target: slot index to grant once @evicting_slot's wind-down resolves
+ *                       (recv STOPPED or grace period elapses), or -1 if no eviction
+ *                       is in flight, or if it is but no target is queued behind it.
+ *                       Distinct from queue order: an admin-forced switch can name
+ *                       this directly, jumping ahead of whatever
+ *                       wisps_session_table_find_next_queued() would have picked
+ * @eviction_deadline_monotonic: CLOCK_MONOTONIC time by which @evicting_slot must have
+ *                       sent STOPPED, else the poll loop force-demotes it
+ *                       (EVICTING_FORCED). Only meaningful while @evicting_slot >= 0
  *
  * One instance per server process, run on its own thread via
  * wisps_control_plane_run().
@@ -63,6 +74,9 @@ typedef struct {
   wisp_render_mode_t supported_modes[WISP_MAX_MODES];
   uint32_t num_supported_modes;
   WISP_ATOMIC bool running;
+  int evicting_slot;
+  int pending_grant_target;
+  struct timespec eviction_deadline_monotonic;
 } wisps_control_plane_t;
 
 /**

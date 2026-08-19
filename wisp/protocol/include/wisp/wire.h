@@ -193,6 +193,15 @@ static void wisp_shm_ring_publish_slot(wisp_shm_ring_t *ring, int idx,
 #define WISP_CLIENT_RETRY_ACTIVATE_MS 2000
 
 /**
+ * WISP_EVICT_GRACE_MS - cooperative wind-down window offered in WISP_MSG_EVICT_PENDING
+ *
+ * If the evicted client hasn't sent WISP_MSG_STOPPED within this many ms of the
+ * EVICT_PENDING, the server force-demotes and reclaims without further client
+ * involvement.
+ */
+#define WISP_EVICT_GRACE_MS 1000
+
+/**
  * enum wisp_msg_kind_t - control protocol message types
  * @WISP_MSG_CONNECT:          client -> server: "here's what I support"
  * @WISP_MSG_VERSION_MISMATCH: server -> client: "our protocol magic/major versions

@@ -24,6 +24,12 @@
  * wispc_is_active()). Closes any previously-held frame_fd first, since a
  * re-grant (e.g. after being deactivated and reactivated) carries a fresh fd.
  *
+ * TODO(rt-state-machine): this immediately reports WISP_MSG_READY_FOR_RT with no
+ * actual warmup or scheduling self-promotion performed. The server's GRANTED_WARMUP ->
+ * ACTIVE_RT handshake is fully implemented, but the client side of the
+ * warmup/self-promotion callback design is not. Revisit once wispc_state_t is actually
+ * wired up and the callback-heavy client redesign lands.
+ *
  * Returns 0 on success, -1 if shm attachment failed or @frame_fd < 0 (caller should
  * treat the session as unusable).
  */
@@ -44,6 +50,10 @@ static int wispc_handle_grant(wispc_ctx_t *ctx, const wisp_grant_msg_t *grant,
 
   wisp_atomic_store(&ctx->granted_generation, grant->generation);
   wisp_atomic_store(&ctx->active, true);
+
+  pthread_mutex_lock(&ctx->send_lock);
+  wisp_ctrl_send(ctx->ctrl_fd, WISP_MSG_READY_FOR_RT, NULL, 0);
+  pthread_mutex_unlock(&ctx->send_lock);
 
   return 0;
 }
@@ -128,6 +138,20 @@ static void *wispc_control(void *arg) {
     case WISP_MSG_DEACTIVATE:
       wisp_atomic_store(&ctx->active, false);
       break;
+    case WISP_MSG_EVICT_PENDING: {
+      wisp_evict_pending_msg_t evict;
+
+      memcpy(&evict, buf, sizeof(evict) < len ? sizeof(evict) : len);
+      /* TODO(rt-state-machine): this immediately acks WISP_MSG_STOPPED with no real
+       * render-loop wind-down/self-demote performed -- same deferred-callback gap as
+       * wispc_handle_grant()'s READY_FOR_RT. Revisit once on_evict_pending()/render
+       * loop draining is actually wired up. */
+      wisp_atomic_store(&ctx->active, false);
+      pthread_mutex_lock(&ctx->send_lock);
+      wisp_ctrl_send(ctx->ctrl_fd, WISP_MSG_STOPPED, NULL, 0);
+      pthread_mutex_unlock(&ctx->send_lock);
+      break;
+    }
     case WISP_MSG_DMABUF_ACK: {
       wisp_dmabuf_ack_msg_t ack;
 

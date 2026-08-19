@@ -27,7 +27,7 @@
  * Finer-grained, per-feature compatibility (does this build understand feature X,
  * at what version) is a separate, additive concern -- see wisp_feature_desc_t.
  */
-#define WISP_PROTOCOL_VERSION_MAJOR 1u
+#define WISP_PROTOCOL_VERSION_MAJOR 0u
 
 /**
  * WISP_PROTOCOL_VERSION_MINOR - backwards-compatible major version additions
@@ -40,7 +40,7 @@
  * 
  * Closely coupled with changes in a @wisp_feature_desc_t
  */
-#define WISP_PROTOCOL_VERSION_MINOR 1u
+#define WISP_PROTOCOL_VERSION_MINOR 0u
 
 /**
  * WISP_MAX_FEATURES - upper bound on distinct feature ids exchanged during CONNECT

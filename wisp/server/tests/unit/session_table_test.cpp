@@ -71,7 +71,8 @@ TEST_F(SessionTableTest, ActivateSetsActiveSlotStateAndGeneration) {
   ASSERT_GE(idx, 0);
   table_.slots[idx].state = WISPS_SESSION_NEGOTIATED;
 
-  wisps_session_table_activate(&table_, idx, /*generation=*/1);
+  wisps_session_table_grant(&table_, idx, /*generation=*/1);
+  wisps_session_table_activate(&table_, idx);
 
   EXPECT_EQ(table_.active_slot, idx);
   EXPECT_EQ(table_.slots[idx].state, WISPS_SESSION_ACTIVE_RT);
@@ -86,8 +87,10 @@ TEST_F(SessionTableTest, ActivatingNewSlotDeactivatesPreviousActiveOne) {
   table_.slots[a].state = WISPS_SESSION_NEGOTIATED;
   table_.slots[b].state = WISPS_SESSION_NEGOTIATED;
 
-  wisps_session_table_activate(&table_, a, /*generation=*/1);
-  wisps_session_table_activate(&table_, b, /*generation=*/2);
+  wisps_session_table_grant(&table_, a, /*generation=*/1);
+  wisps_session_table_activate(&table_, a);
+  wisps_session_table_grant(&table_, b, /*generation=*/2);
+  wisps_session_table_activate(&table_, b);
 
   EXPECT_EQ(table_.active_slot, b);
   EXPECT_EQ(table_.slots[b].state, WISPS_SESSION_ACTIVE_RT);
@@ -99,7 +102,8 @@ TEST_F(SessionTableTest, FreshlyActivatedSlotIsNotImmediatelyTimedOut) {
   int idx = wisps_session_table_add(&table_, 10);
   ASSERT_GE(idx, 0);
   table_.slots[idx].state = WISPS_SESSION_NEGOTIATED;
-  wisps_session_table_activate(&table_, idx, /*generation=*/1);
+  wisps_session_table_grant(&table_, idx, /*generation=*/1);
+  wisps_session_table_activate(&table_, idx);
 
   struct timespec now;
   clock_gettime(CLOCK_MONOTONIC, &now);
@@ -110,7 +114,8 @@ TEST_F(SessionTableTest, StaleHeartbeatEvictsActiveSlotBackToNegotiated) {
   int idx = wisps_session_table_add(&table_, 10);
   ASSERT_GE(idx, 0);
   table_.slots[idx].state = WISPS_SESSION_NEGOTIATED;
-  wisps_session_table_activate(&table_, idx, /*generation=*/1);
+  wisps_session_table_grant(&table_, idx, /*generation=*/1);
+  wisps_session_table_activate(&table_, idx);
 
   struct timespec now;
   clock_gettime(CLOCK_MONOTONIC, &now);
