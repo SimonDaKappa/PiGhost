@@ -63,28 +63,44 @@ typedef enum {
 
 /**
  * enum wisps_admin_client_state_t - wire representation of session state
- * @WISPS_ADMIN_STATE_CONNECTED:  $$$SIMON TODO
- * @WISPS_ADMIN_STATE_NEGOTIATED: $$$SIMON TODO
- * @WISPS_ADMIN_STATE_ACTIVE:     $$$SIMON TODO
- * @WISPS_ADMIN_STATE_REJECTED:   $$$SIMON TODO
+ * @WISPS_ADMIN_STATE_CONNECTED:            socket accepted, no CONNECT yet
+ * @WISPS_ADMIN_STATE_NEGOTIATED:           mode accepted; idle, not requesting/
+ *                                          holding the RT slot
+ * @WISPS_ADMIN_STATE_QUEUED:               requested activation; waiting for the RT
+ *                                          slot to free up
+ * @WISPS_ADMIN_STATE_GRANTED_WARMUP:       granted the RT slot; warming up and
+ *                                          self-promoting scheduling policy, not
+ *                                          yet producing frames
+ * @WISPS_ADMIN_STATE_ACTIVE_RT:            holds the RT slot and is producing
+ *                                          frames
+ * @WISPS_ADMIN_STATE_EVICTING_COOPERATIVE: wind-down in progress after a
+ *                                          cooperative eviction request
+ * @WISPS_ADMIN_STATE_EVICTING_FORCED:      being forcibly demoted/reclaimed after a
+ *                                          grace-period or liveness timeout
+ * @WISPS_ADMIN_STATE_REJECTED:             mode negotiation failed; connection
+ *                                          closing
  *
  * Intentionally a separate enum from the server's internal wisps_session_state_t:
  * this header must not depend on that internal representation, so the admin plane is
- * responsible for translating one to the other. Keep the two enums' meanings in sync if
- * either changes.
+ * responsible for translating one to the other. Keep the two enums' meanings (and
+ * value order) in sync if either changes.
  */
 typedef enum {
   WISPS_ADMIN_STATE_CONNECTED = 0,
   WISPS_ADMIN_STATE_NEGOTIATED = 1,
-  WISPS_ADMIN_STATE_ACTIVE = 2,
-  WISPS_ADMIN_STATE_REJECTED = 3,
+  WISPS_ADMIN_STATE_QUEUED = 2,
+  WISPS_ADMIN_STATE_GRANTED_WARMUP = 3,
+  WISPS_ADMIN_STATE_ACTIVE_RT = 4,
+  WISPS_ADMIN_STATE_EVICTING_COOPERATIVE = 5,
+  WISPS_ADMIN_STATE_EVICTING_FORCED = 6,
+  WISPS_ADMIN_STATE_REJECTED = 7,
 } wisps_admin_client_state_t;
 
 /**
  * struct wisps_admin_client_info_t - one LIST_RESPONSE entry
  * @client_id:          NUL-terminated app id
  * @state:           current session state (wire enum, see above)
- * @negotiated_mode: valid once state is NEGOTIATED or ACTIVE
+ * @negotiated_mode: valid once state is NEGOTIATED or later
  * @payload_kind:    PIXELS or DMABUF (wisp_payload_kind_t). That enum IS declared
  *                   unconditionally, so reusing it here directly is fine.
  */

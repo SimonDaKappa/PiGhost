@@ -5,6 +5,57 @@
 #include "wispc/client.h"
 
 /**
+ * enum wispc_state_t - client-side RT lifecycle state machine
+ * @WISPC_STATE_DISCONNECTED:       no socket. Initial state, and the state reached
+ *                                  after a clean disconnect or an unrecoverable error
+ * @WISPC_STATE_CONNECTING:         socket opening + CONNECT sent, awaiting MODE
+ * @WISPC_STATE_NEGOTIATED:         mode accepted; idle, not requesting/holding the RT
+ *                                  slot
+ * @WISPC_STATE_ACTIVATE_REQUESTED: ACTIVATE_REQUEST sent, awaiting GRANT/DENY/QUEUED
+ * @WISPC_STATE_QUEUED:             activation deferred; another client holds the RT
+ *                                  slot
+ * @WISPC_STATE_WARMUP:             granted the RT slot; still non-RT scheduling
+ *                                  while the app's warmup callback runs (allocator
+ *                                  prewarm, shader JIT, mlockall, dry-run frames)
+ * @WISPC_STATE_PROMOTING:          warmup succeeded; wispc is calling
+ *                                  sched_setattr()/sched_setscheduler() on its own
+ *                                  RT thread(s)
+ * @WISPC_STATE_READY_FOR_RT_SENT:  self-promotion done; READY_FOR_RT sent
+ * @WISPC_STATE_ACTIVE_RT:          steady state -- render thread spinning,
+ *                                  publishing frames, RT scheduling live
+ * @WISPC_STATE_EVICT_PENDING:      EVICT_PENDING received (or the app's render
+ *                                  callback voluntarily stopped); cooperative
+ *                                  wind-down in progress
+ * @WISPC_STATE_DEMOTING:           render loop drained; wispc demoting its own RT
+ *                                  thread(s) back to non-RT scheduling before
+ *                                  reporting STOPPED
+ * @WISPC_STATE_STOPPED_ACK_SENT:   demotion done; STOPPED sent
+ * @WISPC_STATE_EVICTED_IDLE:       back to non-RT, no longer active; may
+ *                                  re-request activation or disconnect
+ * @WISPC_STATE_ERROR:              unrecoverable protocol/local error (bad
+ *                                  handshake, warmup callback failure, socket
+ *                                  reset). Always followed by an automatic
+ *                                  transition to DISCONNECTED; the app must call
+ *                                  wispc_connect() again to retry
+ */
+typedef enum {
+  WISPC_STATE_DISCONNECTED = 0,
+  WISPC_STATE_CONNECTING = 1,
+  WISPC_STATE_NEGOTIATED = 2,
+  WISPC_STATE_ACTIVATE_REQUESTED = 3,
+  WISPC_STATE_QUEUED = 4,
+  WISPC_STATE_WARMUP = 5,
+  WISPC_STATE_PROMOTING = 6,
+  WISPC_STATE_READY_FOR_RT_SENT = 7,
+  WISPC_STATE_ACTIVE_RT = 8,
+  WISPC_STATE_EVICT_PENDING = 9,
+  WISPC_STATE_DEMOTING = 10,
+  WISPC_STATE_STOPPED_ACK_SENT = 11,
+  WISPC_STATE_EVICTED_IDLE = 12,
+  WISPC_STATE_ERROR = 13,
+} wispc_state_t;
+
+/**
  * struct _wispc_ctx_t - client session handle implementation
  * @client_id:             client application id
  * @ctrl_fd:            fd to domain socket for control protocol

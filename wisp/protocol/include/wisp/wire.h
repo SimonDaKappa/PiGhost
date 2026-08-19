@@ -1,13 +1,15 @@
 #ifndef WISP_WIRE_H
 #define WISP_WIRE_H
 
-#include "types.h"
-#include "utils.h"
 #include <errno.h>
 #include <pthread.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
+
+#include "types.h"
+#include "utils.h"
+#include "version.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -148,8 +150,8 @@ static int wisp_shm_ring_write_slot(wisp_shm_ring_t *ring) {
  * need the frame-ready eventfd post and generation/eviction check should use their
  * side's higher-level wrapper (e.g. wispc_publish()) instead of calling this directly.
  */
-static void wisp_shm_ring_publish_slot(wisp_shm_ring_t *ring, int idx, uint64_t frame_id,
-                                       uint64_t now_ns) {
+static void wisp_shm_ring_publish_slot(wisp_shm_ring_t *ring, int idx,
+                                       uint64_t frame_id, uint64_t now_ns) {
   ring->frame_id[idx] = frame_id;
   ring->write_ts_ns[idx] = now_ns;
   wisp_shm_ring_lock(ring);
@@ -191,11 +193,27 @@ static void wisp_shm_ring_publish_slot(wisp_shm_ring_t *ring, int idx, uint64_t 
 #define WISP_CLIENT_RETRY_ACTIVATE_MS 2000
 
 /**
+ * WISP_EVICT_GRACE_MS - cooperative wind-down window offered in WISP_MSG_EVICT_PENDING
+ *
+ * If the evicted client hasn't sent WISP_MSG_STOPPED within this many ms of the
+ * EVICT_PENDING, the server force-demotes and reclaims without further client
+ * involvement.
+ */
+#define WISP_EVICT_GRACE_MS 1000
+
+/**
  * enum wisp_msg_kind_t - control protocol message types
  * @WISP_MSG_CONNECT:          client -> server: "here's what I support"
+ * @WISP_MSG_VERSION_MISMATCH: server -> client: "our protocol magic/major versions
+ *                             are incompatible, here's what I require". Sent instead
+ *                             of WISP_MSG_MODE when CONNECT's magic/major fields fail
+ *                             the check; the connection is closed immediately after
+ *                             (no mode negotiation is attempted, since the two sides
+ *                             cannot be trusted to agree on what any message means).
  * @WISP_MSG_MODE:             server -> client: "render at this mode" / reject
  * @WISP_MSG_ACTIVATE_REQUEST: client -> server: "let me be the client"
- * @WISP_MSG_ACTIVATE_GRANT:   server -> client: "you're it, generation N"
+ * @WISP_MSG_ACTIVATE_GRANT:   server -> client: "you're it, generation N, here's your
+ *                             target core/scheduling hints"
  * @WISP_MSG_ACTIVATE_DENY:    server -> client: "no, and here's why"
  * @WISP_MSG_HEARTBEAT:        client -> server: "still alive, gen N, frame F"
  * @WISP_MSG_DEACTIVATE:       server -> client: "stand down, someone else active"
@@ -206,6 +224,27 @@ static void wisp_shm_ring_publish_slot(wisp_shm_ring_t *ring, int idx, uint64_t 
  *                             SCM_RIGHTS ancillary data. Switches the session to the
  *                             DMABUF payload mode on ACK.
  * @WISP_MSG_DMABUF_ACK:       server -> client: import succeeded / refused
+ * @WISP_MSG_ACTIVATE_QUEUED:  server -> client: "another client is active; you're
+ *                             number N in line". Sent instead of ACTIVATE_GRANT/DENY
+ *                             when ACTIVATE_REQUEST cannot be granted immediately
+ *                             because the (single) RT slot is occupied.
+ * @WISP_MSG_READY_FOR_RT:     client -> server: "I've self-promoted my scheduling
+ *                             policy (see wisp_grant_msg_t hints); start my liveness
+ *                             clock". Empty payload; presence is the signal.
+ * @WISP_MSG_GRANT_DECLINE:    client -> server: "I'm declining this grant" (warmup
+ *                             failed or self-promotion failed). Lets the server offer
+ *                             the slot to the next queued client immediately instead
+ *                             of waiting out a liveness timeout.
+ * @WISP_MSG_EVICT_PENDING:    server -> client: "wind down cooperatively within
+ *                             grace_ms". Replaces an immediate hard evict.
+ * @WISP_MSG_STOPPED:          client -> server: "I've stopped my render loop, drained,
+ *                             and self-demoted to non-RT scheduling". Empty payload;
+ *                             presence is the signal. Triggers the server's cpuset
+ *                             reclaim.
+ * @WISP_MSG_LIVENESS_TIMEOUT: server -> client: best-effort, informational notice
+ *                             sent just before a forced (non-cooperative) eviction,
+ *                             i.e. no heartbeat/frame observed within the liveness
+ *                             window. Empty payload.
  */
 typedef enum {
   WISP_MSG_CONNECT = 1,
@@ -218,19 +257,51 @@ typedef enum {
   WISP_MSG_DISCONNECT = 8,
   WISP_MSG_DMABUF_ANNOUNCE = 9,
   WISP_MSG_DMABUF_ACK = 10,
+  WISP_MSG_ACTIVATE_QUEUED = 11,
+  WISP_MSG_READY_FOR_RT = 12,
+  WISP_MSG_GRANT_DECLINE = 13,
+  WISP_MSG_EVICT_PENDING = 14,
+  WISP_MSG_STOPPED = 15,
+  WISP_MSG_LIVENESS_TIMEOUT = 16,
+  WISP_MSG_VERSION_MISMATCH = 17,
 } wisp_msg_kind_t;
 
 /**
  * struct wisp_connect_msg_t - WISP_MSG_CONNECT payload
- * @client_id:    client application id
- * @num_modes: number of wisp_render_mode_t entries in @modes
- * @modes:     supported render modes, in order of preference
+ * @protocol_magic: this client's WISP_PROTOCOL_MAGIC; must match the server's exactly
+ * @protocol_major: this client's WISP_PROTOCOL_VERSION_MAJOR; must match the server's
+ *                  exactly
+ * @protocol_minor: this client's WISP_PROTOCOL_VERSION_MINOR; backwards-compatbile soft
+ *                  gate wire additions only.
+ * @client_id:      client application id
+ * @num_modes:      number of wisp_render_mode_t entries in @modes
+ * @modes:          supported render modes, in order of preference
+ *
+ * @protocol_magic/@protocol_major are checked first, before anything else in this
+ * struct is even looked at -- a mismatch on either gets WISP_MSG_VERSION_MISMATCH
+ * back and the connection closed, never a mode negotiation.
  */
 typedef struct {
+  uint32_t protocol_magic;
+  uint32_t protocol_major;
+  uint32_t protocol_minor;
   char client_id[WISP_CLIENT_ID_LEN];
   uint32_t num_modes;
   wisp_render_mode_t modes[WISP_MAX_MODES];
 } wisp_connect_msg_t;
+
+/**
+ * struct wisp_version_mismatch_msg_t - WISP_MSG_VERSION_MISMATCH payload
+ * @required_magic: the server's WISP_PROTOCOL_MAGIC
+ * @required_major: the server's WISP_PROTOCOL_VERSION_MAJOR
+ *
+ * Lets a mismatched client log/report specifically what it needs to be rebuilt
+ * against, rather than just "rejected".
+ */
+typedef struct {
+  uint32_t required_magic;
+  uint32_t required_major;
+} wisp_version_mismatch_msg_t;
 
 /**
  * struct wisp_mode_msg_t - WISP_MSG_MODE payload
@@ -244,13 +315,73 @@ typedef struct {
 
 /**
  * struct wisp_grant_msg_t - WISP_MSG_ACTIVATE_GRANT payload
- * @generation: the generation number granted to the client; if this no longer matches
- *              the server's generation, the client has been evicted and must stop
- *              writing
+ * @generation:        the generation number granted to the client; if this no longer
+ *                     matches the server's generation, the client has been evicted and
+ *                     must stop writing
+ * @target_core:       cpuset core index the server has already placed this client's
+ *                     control-thread TID onto; server-computed, not client-asserted
+ * @priority_hint:     suggested scheduling priority for the client's self-promotion
+ *                     (sched_setattr), server-computed
+ * @period_ns:         expected frame period in nanoseconds, informs SCHED_DEADLINE
+ *                     parameters the client chooses for itself
+ * @runtime_budget_ns: expected per-period runtime budget in nanoseconds, informs
+ *                     SCHED_DEADLINE parameters the client chooses for itself
+ *
+ * target_core/priority_hint/period_ns/runtime_budget_ns are all consumed by the
+ * client's warmup callback purely as inputs to its own self-promotion decision; the
+ * server never performs the sched_setattr() call on the client's behalf (i.e.,
+ * split-responsibility scheduling handshake).
  */
 typedef struct {
   uint32_t generation;
+  uint32_t target_core;
+  uint32_t priority_hint;
+  uint64_t period_ns;
+  uint64_t runtime_budget_ns;
 } wisp_grant_msg_t;
+
+/**
+ * struct wisp_queued_msg_t - WISP_MSG_ACTIVATE_QUEUED payload
+ * @queue_position: 1-based position in line for the RT slot (1 = next to be granted)
+ *
+ * Informational only; queue membership itself is derived server-side from the session
+ * table, not tracked in a separate bounded structure. This message may be re-sent with
+ * an updated @queue_position as the queue shifts.
+ */
+typedef struct {
+  uint32_t queue_position;
+} wisp_queued_msg_t;
+
+/**
+ * enum wisp_grant_decline_reason_t - WISP_MSG_GRANT_DECLINE reason codes
+ * @WISP_GRANT_DECLINE_WARMUP_FAILED:    the client's warmup callback returned failure
+ *                                       or exceeded its timeout
+ * @WISP_GRANT_DECLINE_PROMOTION_FAILED: the client's own sched_setattr()/
+ *                                       sched_setscheduler() self-promotion call failed
+ *                                       (e.g. missing CAP_SYS_NICE)
+ */
+typedef enum {
+  WISP_GRANT_DECLINE_WARMUP_FAILED = 1,
+  WISP_GRANT_DECLINE_PROMOTION_FAILED = 2,
+} wisp_grant_decline_reason_t;
+
+/**
+ * struct wisp_grant_decline_msg_t - WISP_MSG_GRANT_DECLINE payload
+ * @reason: why the client is declining this activation grant
+ *
+ */
+typedef struct {
+  uint32_t reason;
+} wisp_grant_decline_msg_t;
+
+/**
+ * struct wisp_evict_pending_msg_t - WISP_MSG_EVICT_PENDING payload
+ * @grace_ms: cooperative wind-down window, in milliseconds, before the server treats
+ *            this as a forced eviction
+ */
+typedef struct {
+  uint32_t grace_ms;
+} wisp_evict_pending_msg_t;
 
 /**
  * struct wisp_deny_msg_t - WISP_MSG_ACTIVATE_DENY payload

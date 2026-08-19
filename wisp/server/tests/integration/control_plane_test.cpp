@@ -80,10 +80,19 @@ void *FakeProducerLoop(void *arg) {
     if (rc != 0)
       continue; // timeout or transient error
 
-    if (kind == WISP_MSG_ACTIVATE_GRANT)
+    if (kind == WISP_MSG_ACTIVATE_GRANT) {
+      // Mirrors wispc_handle_grant()'s immediate READY_FOR_RT: this fake producer
+      // has no warmup/self-promotion logic of its own, same TODO as client_control.c.
+      wisp_ctrl_send(fp->fd, WISP_MSG_READY_FOR_RT, nullptr, 0);
       fp->active.store(true);
-    else if (kind == WISP_MSG_DEACTIVATE)
+    } else if (kind == WISP_MSG_DEACTIVATE) {
       fp->active.store(false);
+    } else if (kind == WISP_MSG_EVICT_PENDING) {
+      // Mirrors client_control.c's immediate STOPPED ack: no real wind-down here
+      // either.
+      fp->active.store(false);
+      wisp_ctrl_send(fp->fd, WISP_MSG_STOPPED, nullptr, 0);
+    }
   }
   return nullptr;
 }
@@ -120,6 +129,9 @@ FakeProducer *FakeProducerConnect(const char *client_id, const wisp_render_mode_
   }
 
   wisp_connect_msg_t connect_msg{};
+  connect_msg.protocol_magic = WISP_PROTOCOL_MAGIC;
+  connect_msg.protocol_major = WISP_PROTOCOL_VERSION_MAJOR;
+  connect_msg.protocol_minor = WISP_PROTOCOL_VERSION_MINOR;
   strncpy(connect_msg.client_id, client_id, WISP_CLIENT_ID_LEN - 1);
   connect_msg.num_modes =
       static_cast<uint32_t>(num_modes > WISP_MAX_MODES ? WISP_MAX_MODES : num_modes);
@@ -157,11 +169,14 @@ FakeProducer *FakeProducerConnect(const char *client_id, const wisp_render_mode_
 
   if (wisp_ctrl_recv(fd, &kind, buf, sizeof(buf), &len) == 0 &&
       kind == WISP_MSG_ACTIVATE_GRANT) {
+    // Mirrors wispc_handle_grant()'s immediate READY_FOR_RT -- see the TODO on that
+    // function; this fake producer has no real warmup logic either.
+    wisp_ctrl_send(fd, WISP_MSG_READY_FOR_RT, nullptr, 0);
     fp->active.store(true);
   }
-  /* WISP_MSG_ACTIVATE_DENY (or anything else): stays inactive. The background thread
-   * below will pick up the eventual GRANT if/when this producer is admin-switched to
-   * active. */
+  /* WISP_MSG_ACTIVATE_QUEUED or WISP_MSG_ACTIVATE_DENY: stays inactive. The
+   * background thread below will pick up the eventual GRANT once the RT slot frees
+   * up (queued) or this producer is admin-switched to active (denied). */
 
   fp->running.store(true);
   pthread_create(&fp->thread, nullptr, FakeProducerLoop, fp);
@@ -255,7 +270,7 @@ TEST_F(ControlPlaneTest, AdminListReflectsRealConnectedClient) {
   memcpy(&resp, buf, sizeof(resp));
   ASSERT_EQ(resp.count, 1u);
   EXPECT_STREQ(resp.clients[0].client_id, "sine_wave_cpu");
-  EXPECT_EQ(resp.clients[0].state, WISPS_ADMIN_STATE_ACTIVE);
+  EXPECT_EQ(resp.clients[0].state, WISPS_ADMIN_STATE_ACTIVE_RT);
   EXPECT_EQ(resp.clients[0].negotiated_mode.width, 320u);
 
   close(fd);
