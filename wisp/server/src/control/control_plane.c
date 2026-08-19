@@ -131,7 +131,7 @@ static void handle_connect(wisps_control_plane_t *cp, int idx,
 static void handle_activate_request(wisps_control_plane_t *cp, int idx);
 
 /**
- * handle_heartbeat() - refresh the ACTIVE client's liveness stamp. 
+ * handle_heartbeat() - refresh the ACTIVE client's liveness stamp.
  * @cp:  control plane handling the message
  * @idx: session table slot index of the heartbeat fd
  */
@@ -180,7 +180,7 @@ static void handle_grant_decline(wisps_control_plane_t *cp, int idx);
  * @prev_idx: currently ACTIVE_RT slot to evict
  * @target:   slot to grant once @prev_idx confirms STOPPED or the grace period
  *            elapses
- * 
+ *
  * Moves @prev_idx to WISPS_SESSION_EVICTING_COOPERATIVE and sends
  * WISP_MSG_EVICT_PENDING{grace_ms}. Stashes @target in cp->pending_grant_target and
  * stamps cp->eviction_deadline_monotonic. The poll loop force-demotes @prev_idx if
@@ -375,13 +375,20 @@ void *wisps_control_plane_run(void *arg) {
       wisps_evict_client(cp->ring);
       if (cp->dp)
         wisps_data_plane_kick(cp->dp);
+      // LIVENESS_TIMEOUT first, then DEACTIVATE. The fd is very possibly already dead
+      // so both sends may silently fail; forced eviction that doesn't wait on
+      // cooperation either way.
+      wisp_ctrl_send(cp->table.slots[timed_out].ctrl_fd, WISP_MSG_LIVENESS_TIMEOUT,
+                     NULL, 0);
       wisp_ctrl_send(cp->table.slots[timed_out].ctrl_fd, WISP_MSG_DEACTIVATE, NULL, 0);
       maybe_grant_next_queued(cp);
     }
 
     if (cp->evicting_slot >= 0) {
-      int64_t sec_diff = (int64_t)now.tv_sec - (int64_t)cp->eviction_deadline_monotonic.tv_sec;
-      int64_t nsec_diff = (int64_t)now.tv_nsec - (int64_t)cp->eviction_deadline_monotonic.tv_nsec;
+      int64_t sec_diff =
+          (int64_t)now.tv_sec - (int64_t)cp->eviction_deadline_monotonic.tv_sec;
+      int64_t nsec_diff =
+          (int64_t)now.tv_nsec - (int64_t)cp->eviction_deadline_monotonic.tv_nsec;
       if (sec_diff * 1000 + nsec_diff / 1000000 >= 0) {
         // Grace period elapsed with no WISP_MSG_STOPPED: force-demote. Real
         // sched_setattr(SCHED_OTHER)/cpuset-reclaim work is out of scope for this
@@ -466,7 +473,7 @@ static void begin_eviction(wisps_control_plane_t *cp, int prev_idx, int target) 
 
   wisp_evict_pending_msg_t evict = {.grace_ms = WISP_EVICT_GRACE_MS};
   wisp_ctrl_send(cp->table.slots[prev_idx].ctrl_fd, WISP_MSG_EVICT_PENDING, &evict,
-                sizeof(evict));
+                 sizeof(evict));
 
   cp->evicting_slot = prev_idx;
   cp->pending_grant_target = target;
@@ -487,8 +494,8 @@ static void finish_pending_grant(wisps_control_plane_t *cp) {
     return; // e.g. the target disconnected while the eviction was in flight
 
   wisps_session_t *slot = &cp->table.slots[target];
-  if (!slot->in_use || (slot->state != WISPS_SESSION_NEGOTIATED &&
-                        slot->state != WISPS_SESSION_QUEUED))
+  if (!slot->in_use ||
+      (slot->state != WISPS_SESSION_NEGOTIATED && slot->state != WISPS_SESSION_QUEUED))
     return; // defensive: target's state changed underneath us
 
   do_grant(cp, target);
@@ -526,7 +533,7 @@ static void grant_slot(wisps_control_plane_t *cp, int idx) {
 }
 
 /**
- * translate_state() - internal state -> wire state 
+ * translate_state() - internal state -> wire state
  * @state: internal session state
  *
  * Returns: corresponding wire state (wisps_admin_client_state_t)
@@ -632,7 +639,7 @@ static void handle_disconnect(wisps_control_plane_t *cp, int idx) {
     if (cp->dp)
       wisps_data_plane_kick(cp->dp);
   } else if (slot->state == WISPS_SESSION_EVICTING_COOPERATIVE ||
-            slot->state == WISPS_SESSION_EVICTING_FORCED) {
+             slot->state == WISPS_SESSION_EVICTING_FORCED) {
     // fd is going away mid-wind-down; the grace-period deadline check would
     // eventually notice this too, but there's no need to wait for it once we
     // already know the slot is gone.
@@ -693,9 +700,10 @@ static void handle_connect(wisps_control_plane_t *cp, int idx,
     slot->offered_modes[i] = connect->modes[i];
 
   slot->negotiated_mode = chosen;
-  slot->negotiated_protocol_minor = connect->protocol_minor < WISP_PROTOCOL_VERSION_MINOR
-                                        ? connect->protocol_minor
-                                        : WISP_PROTOCOL_VERSION_MINOR;
+  slot->negotiated_protocol_minor =
+      connect->protocol_minor < WISP_PROTOCOL_VERSION_MINOR
+          ? connect->protocol_minor
+          : WISP_PROTOCOL_VERSION_MINOR;
   slot->state = WISPS_SESSION_NEGOTIATED;
 }
 
