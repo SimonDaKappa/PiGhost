@@ -78,7 +78,7 @@ void RenderSineFrame(unsigned char *buf, uint32_t width, uint32_t height,
 class DataPlaneTest : public ::testing::Test {
 protected:
   void SetUp() override {
-    ring_ = wisps_shm_ring_create();
+    ring_ = wisps_ring_create();
     ASSERT_NE(ring_, nullptr) << "shm ring create failed -- is /dev/shm writable?";
     frame_fd_ = wisps_shm_frame_fd_create();
     ASSERT_GE(frame_fd_, 0);
@@ -88,7 +88,7 @@ protected:
     if (frame_fd_ >= 0)
       close(frame_fd_);
     if (ring_)
-      wisps_shm_ring_destroy(ring_);
+      wisps_ring_destroy(ring_);
   }
 
   wisp_shm_ring_t *ring_ = nullptr;
@@ -119,7 +119,7 @@ TEST_F(DataPlaneTest, SineWaveRendersWithZeroDropsAndProducesViewableFrames) {
   wisp_atomic_store(&ring_->generation, 1);
 
   for (int i = 0; i < total_frames; i++) {
-    int slot = wisp_shm_ring_write_slot(ring_);
+    int slot = wisp_ring_claim_slot(ring_);
     RenderSineFrame(ring_->frame_bufs[slot], kWidth, kHeight, phase);
 
     struct timespec now;

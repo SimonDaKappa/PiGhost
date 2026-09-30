@@ -62,8 +62,8 @@ There is no ordering requirement between admin clients and producers.
   | `negotiated_mode`  | `wisp_render_mode_t`| set once MODE accepted |
   | `granted_generation` | uint32             | copy of ring generation at grant time |
   | `last_heartbeat_monotonic` | `struct timespec` | last HEARTBEAT recv time |
-  | `payload_kind`     | `wisp_payload_kind_t` | PIXELS until ACKed DMABUF |
-  | `dmabuf_set`       | `wisps_dmabuf_set_t` | valid only if payload_kind==DMABUF |
+  | `render_kind`     | `wisp_render_kind_t` | PIXELS until ACKed DMABUF |
+  | `dmabuf_set`       | `wisps_dmabuf_set_t` | valid only if render_kind==DMABUF |
 
 - Slot lookup key for admin commands (§6) is `client_id`, not fd/slot index
   - `switch <client_id>` looks up by `client_id` whether the target is
@@ -149,7 +149,7 @@ about admin semantics:
 | type | direction | payload | purpose |
 |------|-----------|---------|---------|
 | `WISPS_ADMIN_MSG_LIST_REQUEST` | client→display | none | ask for session table snapshot |
-| `WISPS_ADMIN_MSG_LIST_RESPONSE` | display→client | array of `{client_id, state, negotiated_mode, payload_kind}`, up to `MAX_CLIENTS` entries | snapshot reply |
+| `WISPS_ADMIN_MSG_LIST_RESPONSE` | display→client | array of `{client_id, state, negotiated_mode, render_kind}`, up to `MAX_CLIENTS` entries | snapshot reply |
 | `WISPS_ADMIN_MSG_SWITCH_REQUEST` | client→display | `{client_id}` | request activation switch to `client_id` |
 | `WISPS_ADMIN_MSG_SWITCH_RESPONSE` | display→client | `{ok, reason}` | switch outcome |
 

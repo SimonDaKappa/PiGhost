@@ -43,11 +43,11 @@
  * @num_offered: number of valid entries in @offered
  * @out_chosen:  filled in with the matched mode iff this returns true
  *
- * Return: true iff some offered mode exactly (width, height, fps all equal) matches
+ * Return: true iff some offered resolution exactly (width, height) matches
  * some entry in @cp->supported_modes.
  */
-static bool negotiate_mode(wisps_control_plane_t *cp, const wisp_render_mode_t *offered,
-                           uint32_t num_offered, wisp_render_mode_t *out_chosen);
+static bool negotiate_mode(wisps_control_plane_t *cp, const wisp_resolution_t *offered,
+                           uint32_t num_offered, wisp_resolution_t *out_chosen);
 
 /**
  * do_grant() - unconditionally perform a grant to @idx, no eviction involved
@@ -225,7 +225,7 @@ static void maybe_grant_next_queued(wisps_control_plane_t *cp);
 int wisps_control_plane_init(wisps_control_plane_t *cp, wisp_shm_ring_t *ring,
                              int frame_fd, wisps_data_plane_t *dp,
                              wisps_control_query_channel_t *chan,
-                             const wisp_render_mode_t *supported_modes,
+                             const wisp_resolution_t *supported_modes,
                              uint32_t num_supported_modes) {
   if (num_supported_modes == 0) {
     fprintf(stderr, "[pgipc-control] num_supported_modes must be >= 1\n");
@@ -268,9 +268,9 @@ int wisps_control_plane_init(wisps_control_plane_t *cp, wisp_shm_ring_t *ring,
   struct sockaddr_un addr;
   memset(&addr, 0, sizeof(addr));
   addr.sun_family = AF_UNIX;
-  strncpy(addr.sun_path, WISPS_CONTROL_SOCK_PATH, sizeof(addr.sun_path) - 1);
+  strncpy(addr.sun_path, WISP_CONTROL_SOCK_PATH, sizeof(addr.sun_path) - 1);
 
-  unlink(WISPS_CONTROL_SOCK_PATH); // stale socket from a previous run
+  unlink(WISP_CONTROL_SOCK_PATH); // stale socket from a previous run
 
   if (bind(cp->listen_fd, (struct sockaddr *)&addr, sizeof(addr)) != 0) {
     perror("bind (control plane)");
@@ -372,9 +372,8 @@ void *wisps_control_plane_run(void *arg) {
       // wisps_session_table_check_heartbeat_timeouts() already moved the slot
       // ACTIVE -> NEGOTIATED internally; the ring-generation bump and wire
       // notification are this layer's responsibility.
-      wisps_evict_client(cp->ring);
-      if (cp->dp)
-        wisps_data_plane_kick(cp->dp);
+      wisps_ring_evict_client(cp->ring);
+      wisps_data_plane_kick(cp->dp);
       // LIVENESS_TIMEOUT first, then DEACTIVATE. The fd is very possibly already dead
       // so both sends may silently fail; forced eviction that doesn't wait on
       // cooperation either way.
@@ -433,16 +432,15 @@ void wisps_control_plane_close(wisps_control_plane_t *cp) {
   cp->listen_fd = -1;
   cp->stop_read_fd = -1;
   cp->stop_write_fd = -1;
-  unlink(WISPS_CONTROL_SOCK_PATH);
+  unlink(WISP_CONTROL_SOCK_PATH);
 }
 
-static bool negotiate_mode(wisps_control_plane_t *cp, const wisp_render_mode_t *offered,
-                           uint32_t num_offered, wisp_render_mode_t *out_chosen) {
+static bool negotiate_mode(wisps_control_plane_t *cp, const wisp_resolution_t *offered,
+                           uint32_t num_offered, wisp_resolution_t *out_chosen) {
   for (uint32_t i = 0; i < num_offered; i++) {
     for (uint32_t j = 0; j < cp->num_supported_modes; j++) {
       if (offered[i].width == cp->supported_modes[j].width &&
-          offered[i].height == cp->supported_modes[j].height &&
-          offered[i].fps == cp->supported_modes[j].fps) {
+          offered[i].height == cp->supported_modes[j].height) {
         *out_chosen = cp->supported_modes[j];
         return true;
       }
@@ -452,18 +450,22 @@ static bool negotiate_mode(wisps_control_plane_t *cp, const wisp_render_mode_t *
 }
 
 static void do_grant(wisps_control_plane_t *cp, int idx) {
-  wisps_evict_client(cp->ring); // bumps generation
-  if (cp->dp)
-    wisps_data_plane_kick(cp->dp);
+  wisps_ring_evict_client(cp->ring); // bumps generation
+  wisps_data_plane_kick(cp->dp);
 
   uint32_t generation = wisp_atomic_load(&cp->ring->generation);
   wisps_session_table_grant(&cp->table, idx, generation);
 
+  /* TODO(rt-state-machine): target_core/priority_hint/period_ns/runtime_budget_ns
+   * are never populated here (all zero-init) -- period_ns in particular needs a
+   * client-proposed manifest value clamped by the server, mirroring the
+   * offered/chosen render_mode negotiation pattern, before real CLOCKED/TICKED
+   * pacing or SCHED_DEADLINE promotion can be meaningful. */
   wisp_grant_msg_t grant = {.generation = generation};
   wisp_ctrl_send_fds(cp->table.slots[idx].ctrl_fd, WISP_MSG_ACTIVATE_GRANT, &grant,
                      sizeof(grant), &cp->frame_fd, 1);
 
-  wisp_render_mode_t new_mode = cp->table.slots[idx].negotiated_mode;
+  wisp_resolution_t new_mode = cp->table.slots[idx].negotiated_mode;
   if (cp->dp)
     wisps_data_plane_set_mode(cp->dp, new_mode.width, new_mode.height);
 }
@@ -573,7 +575,7 @@ static void handle_list_query(wisps_control_plane_t *cp, wisps_control_query_t *
     out->client_id[WISP_CLIENT_ID_LEN - 1] = '\0';
     out->state = translate_state(cp->table.slots[i].state);
     out->negotiated_mode = cp->table.slots[i].negotiated_mode;
-    out->payload_kind = cp->table.slots[i].payload_kind;
+    out->render_kind = cp->table.slots[i].render_kind;
     count++;
   }
   query->list_response.count = count;
@@ -635,9 +637,8 @@ static void handle_disconnect(wisps_control_plane_t *cp, int idx) {
                       slot->state == WISPS_SESSION_EVICTING_FORCED;
 
   if (slot->state == WISPS_SESSION_ACTIVE_RT) {
-    wisps_evict_client(cp->ring); // nothing to notify, fd is going away
-    if (cp->dp)
-      wisps_data_plane_kick(cp->dp);
+    wisps_ring_evict_client(cp->ring); // nothing to notify, fd is going away
+    wisps_data_plane_kick(cp->dp);
   } else if (slot->state == WISPS_SESSION_EVICTING_COOPERATIVE ||
              slot->state == WISPS_SESSION_EVICTING_FORCED) {
     // fd is going away mid-wind-down; the grace-period deadline check would
@@ -677,7 +678,7 @@ static void handle_connect(wisps_control_plane_t *cp, int idx,
     return;
   }
 
-  wisp_render_mode_t chosen;
+  wisp_resolution_t chosen;
   bool matched = negotiate_mode(cp, connect->modes, connect->num_modes, &chosen);
 
   wisp_mode_msg_t reply = {0};

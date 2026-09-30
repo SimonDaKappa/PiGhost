@@ -42,7 +42,7 @@ typedef struct {
 
 /**
  * struct wisps_data_plane_t - data-plane loop handle
- * @ring:     shm ring, created by the server via wisps_shm_ring_create()
+ * @ring:     shm ring, created by the server via wisps_ring_create()
  * @frame_fd: frame-ready eventfd, sent to each client via SCM_RIGHTS on activation
  *            grant
  * @abort_fd: eventfd created internally by dataplane init; written by kick to instantly
@@ -63,7 +63,7 @@ typedef struct {
  * This is a plain atomic-free field pair by design: writes only ever happen from the
  * control-plane thread while the ACTIVE client is being changed, which is exactly when
  * stale in-flight frames at the old size are also being flushed via
- * wisps_evict_client(), so a torn read here is at worst one throwaway blit at a
+ * wisps_ring_evict_client(), so a torn read here is at worst one throwaway blit at a
  * mismatched size, not a correctness issue for anything downstream.
  */
 typedef struct {
@@ -127,7 +127,7 @@ void *wisps_data_plane_run(void *arg);
  *
  * Writes to @dp->abort_fd without touching @dp->frame_fd or clearing @dp->running.
  * Intended to be called from the control-plane thread right after
- * wisps_evict_client(), so the loop re-checks checkout() promptly instead of
+ * wisps_ring_evict_client(), so the loop re-checks checkout() promptly instead of
  * potentially blocking until the next frame-ready signal (which may never come if the
  * evicted client was the last one publishing).
  */

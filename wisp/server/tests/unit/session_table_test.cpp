@@ -14,8 +14,8 @@
 
 namespace {
 
-wisp_render_mode_t Mode(uint32_t w, uint32_t h, uint32_t fps) {
-  return wisp_render_mode_t{.width = w, .height = h, .fps = fps};
+wisp_render_mode_t Mode(uint32_t w, uint32_t h) {
+  return wisp_render_mode_t{.width = w, .height = h};
 }
 
 class SessionTableTest : public ::testing::Test {
@@ -57,9 +57,9 @@ TEST_F(SessionTableTest, FindByAppIdLocatesNegotiatedClient) {
   int idx = wisps_session_table_add(&table_, 10);
   ASSERT_GE(idx, 0);
   strncpy(table_.slots[idx].client_id, "sine_wave_cpu", WISP_CLIENT_ID_LEN - 1);
-  table_.slots[idx].offered_modes[0] = Mode(320, 240, 60);
+  table_.slots[idx].offered_modes[0] = Mode(320, 240);
   table_.slots[idx].num_offered_modes = 1;
-  table_.slots[idx].negotiated_mode = Mode(320, 240, 60);
+  table_.slots[idx].negotiated_mode = Mode(320, 240);
   table_.slots[idx].state = WISPS_SESSION_NEGOTIATED;
 
   EXPECT_EQ(wisps_session_table_find_by_client_id(&table_, "sine_wave_cpu"), idx);
@@ -120,7 +120,7 @@ TEST_F(SessionTableTest, StaleHeartbeatEvictsActiveSlotBackToNegotiated) {
   struct timespec now;
   clock_gettime(CLOCK_MONOTONIC, &now);
   struct timespec stale = now;
-  stale.tv_sec -= (WISP_CLIENT_HEARTBEAT_TIMEOUT_MS / 1000) + 1;
+  stale.tv_sec -= (WISP_HEARTBEAT_TIMEOUT_MS / 1000) + 1;
   table_.slots[idx].last_heartbeat_monotonic = stale;
 
   EXPECT_EQ(wisps_session_table_check_heartbeat_timeouts(&table_, now), idx);

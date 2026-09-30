@@ -101,14 +101,14 @@ typedef enum {
  * @client_id:          NUL-terminated app id
  * @state:           current session state (wire enum, see above)
  * @negotiated_mode: valid once state is NEGOTIATED or later
- * @payload_kind:    PIXELS or DMABUF (wisp_payload_kind_t). That enum IS declared
+ * @render_kind:    PIXELS or DMABUF (wisp_render_kind_t). That enum IS declared
  *                   unconditionally, so reusing it here directly is fine.
  */
 typedef struct {
   char client_id[WISP_CLIENT_ID_LEN];
   wisps_admin_client_state_t state;
-  wisp_render_mode_t negotiated_mode;
-  wisp_payload_kind_t payload_kind;
+  wisp_resolution_t negotiated_mode;
+  wisp_render_kind_t render_kind;
 } wisps_admin_client_info_t;
 
 /**

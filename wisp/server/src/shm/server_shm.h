@@ -8,22 +8,22 @@ extern "C" {
 #endif
 
 /**
- * wisps_shm_ring_create() - create the shared ring buffer
+ * wisps_ring_create() - create the shared ring buffer
  *
  * Creates a new shared memory segment for the frame ring, unlinking any stale segment
  * left over from a previous run first.
  *
  * Return: pointer to the mapped ring, or NULL on error.
  */
-wisp_shm_ring_t *wisps_shm_ring_create(void);
+wisp_shm_ring_t *wisps_ring_create(void);
 
 /**
- * wisps_shm_ring_destroy() - unmap and unlink the shared ring
- * @ring: ring returned by wisps_shm_ring_create(), may be NULL
+ * wisps_ring_destroy() - unmap and unlink the shared ring
+ * @ring: ring returned by wisps_ring_create(), may be NULL
  *
  * Call once, at server shutdown.
  */
-void wisps_shm_ring_destroy(wisp_shm_ring_t *ring);
+void wisps_ring_destroy(wisp_shm_ring_t *ring);
 
 /**
  * wisps_shm_frame_fd_create() - create the frame-ready eventfd
@@ -39,29 +39,29 @@ void wisps_shm_ring_destroy(wisp_shm_ring_t *ring);
 int wisps_shm_frame_fd_create(void);
 
 /**
- * wisps_shm_ring_checkout() - claim the newest ready frame for reading
+ * wisps_ring_checkout() - claim the newest ready frame for reading
  * @ring: attached/created ring
  *
  * Marks @ring's newest complete frame as server-locked so the client's slot-picking
- * logic will not reuse it out from under the server. Call wisps_shm_ring_release() when
+ * logic will not reuse it out from under the server. Call wisps_ring_release() when
  * done with the buffer (e.g. after finishing the memcpy/page-flip to HDMI).
  *
  * Return: buffer index to read (0..WISP_NUM_BUFFERS-1), or -1 if no frame has been
  * published yet.
  */
-int wisps_shm_ring_checkout(wisp_shm_ring_t *ring);
+int wisps_ring_checkout(wisp_shm_ring_t *ring);
 
 /**
- * wisps_shm_ring_release() - release the buffer claimed by checkout()
+ * wisps_ring_release() - release the buffer claimed by checkout()
  * @ring: attached/created ring
  *
  * Clears the server-locked index back to -1. Safe to call even if no checkout is
  * currently held.
  */
-void wisps_shm_ring_release(wisp_shm_ring_t *ring);
+void wisps_ring_release(wisp_shm_ring_t *ring);
 
 /**
- * wisps_evict_client() - evict the current client
+ * wisps_ring_evict_client() - evict the current client
  * @ring: attached/created ring
  *
  * Bumps @generation (so any client still holding the old grant sees it is evicted on
@@ -70,7 +70,7 @@ void wisps_shm_ring_release(wisp_shm_ring_t *ring);
  * of mode. In the dmabuf mode a stale index would otherwise point into the *previous*
  * client's buffer set.
  */
-void wisps_evict_client(wisp_shm_ring_t *ring);
+void wisps_ring_evict_client(wisp_shm_ring_t *ring);
 
 /**
  * struct wisps_dmabuf_set_t - server's record of one client's dmabufs

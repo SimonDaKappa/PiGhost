@@ -1,10 +1,10 @@
 // control_plane.h - the server's producer control-socket thread.
 //
 // Owns, exclusively:
-//  - WISPS_CONTROL_SOCK_PATH's listen socket and every accepted producer fd
+//  - WISP_CONTROL_SOCK_PATH's listen socket and every accepted producer fd
 //  - the session table. The session table single-client invariant is enforced simply
 //    by never touching the table from any other thread
-//  - the shm ring's generation counter, via wisps_evict_client(), called exactly once
+//  - the shm ring's generation counter, via wisps_ring_evict_client(), called exactly once
 //    per activation switch.
 //  - telling the data-plane thread when the negotiated frame size changes
 //    (wisps_data_plane_set_mode()), so a switch to a producer negotiated at a different
@@ -28,12 +28,12 @@ extern "C" {
 
 /**
  * struct wisps_control_plane_t - control thread state
- * @listen_fd:          bound+listening WISPS_CONTROL_SOCK_PATH socket
+ * @listen_fd:          bound+listening WISP_CONTROL_SOCK_PATH socket
  * @stop_read_fd:        poll()'d alongside every other fd; readable once
  *                       wisps_control_plane_stop() has been called
  * @stop_write_fd:       wisps_control_plane_stop() writes one byte here
  * @table:               the session table; touched ONLY on this thread
- * @ring:                shm ring, for wisps_evict_client() on every activation switch;
+ * @ring:                shm ring, for wisps_ring_evict_client() on every activation switch;
  *                       not owned
  * @frame_fd:            frame-ready eventfd shared with @dp; not owned. Sent to each 
  *                       client via SCM_RIGHTS on WISP_MSG_ACTIVATE_GRANT
@@ -71,7 +71,7 @@ typedef struct {
   int frame_fd;
   wisps_data_plane_t *dp;
   wisps_control_query_channel_t *chan;
-  wisp_render_mode_t supported_modes[WISP_MAX_MODES];
+  wisp_resolution_t supported_modes[WISP_MAX_MODES];
   uint32_t num_supported_modes;
   WISP_ATOMIC bool running;
   int evicting_slot;
@@ -83,7 +83,7 @@ typedef struct {
  * wisps_control_plane_init() - create and bind the control listen socket
  * @cp:                  control plane state to populate
  * @ring:                shm ring, created by the server via
- *                       wisps_shm_ring_create(); must outlive @cp
+ *                       wisps_ring_create(); must outlive @cp
  * @frame_fd:            frame-ready eventfd; must outlive @cp. Both @cp and @dp are 
  *                       peer consumers of it
  * @dp:                  data-plane handle to notify on mode switches/evictions, or
@@ -93,7 +93,7 @@ typedef struct {
  * @supported_modes:     server-supported modes
  * @num_supported_modes: number of entries in @supported_modes (1..WISP_MAX_MODES)
  *
- * Unlinks any stale socket file at WISPS_CONTROL_SOCK_PATH left over from a previous
+ * Unlinks any stale socket file at WISP_CONTROL_SOCK_PATH left over from a previous
  * run before binding, and initializes an empty session table.
  *
  * Return: 0 on success, -1 on error (socket/bind/listen failure, or
@@ -102,7 +102,7 @@ typedef struct {
 int wisps_control_plane_init(wisps_control_plane_t *cp, wisp_shm_ring_t *ring,
                              int frame_fd, wisps_data_plane_t *dp,
                              wisps_control_query_channel_t *chan,
-                             const wisp_render_mode_t *supported_modes,
+                             const wisp_resolution_t *supported_modes,
                              uint32_t num_supported_modes);
 
 /**

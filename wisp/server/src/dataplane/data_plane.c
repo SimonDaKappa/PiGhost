@@ -51,7 +51,6 @@ int wisps_data_plane_init(wisps_data_plane_t *dp, wisp_shm_ring_t *ring, int fra
   return 0;
 }
 
-
 void *wisps_data_plane_run(void *arg) {
   wisps_data_plane_t *dp = (wisps_data_plane_t *)arg;
 
@@ -74,19 +73,20 @@ void *wisps_data_plane_run(void *arg) {
         /* read() clears (coalesces) the counter; N pending publishes since our
          * last wake collapse into a single "check the ring" pass, which is
          * correct since the ring only tracks the single latest-ready frame. */
-        while (read(dp->frame_fd, &counter, sizeof(counter)) > 0) {}
+        while (read(dp->frame_fd, &counter, sizeof(counter)) > 0) {
+        }
         have_frame_signal = true;
-      } 
-      else if (events[i].data.fd == dp->abort_fd) {
+      } else if (events[i].data.fd == dp->abort_fd) {
         /* Kick: drain and fall through to re-check checkout() / running. */
-        while (read(dp->abort_fd, &counter, sizeof(counter)) > 0) {}
+        while (read(dp->abort_fd, &counter, sizeof(counter)) > 0) {
+        }
       }
     }
 
     if (!have_frame_signal)
       continue; /* woken only by a kick; nothing new to render yet */
 
-    int idx = wisps_shm_ring_checkout(dp->ring);
+    int idx = wisps_ring_checkout(dp->ring);
     if (idx < 0) {
       /* Spurious wake: the client that posted was evicted (or otherwise
        * stopped publishing) before we got here. Nothing to render. */
@@ -111,7 +111,7 @@ void *wisps_data_plane_run(void *arg) {
     clock_gettime(CLOCK_MONOTONIC, &now);
     uint64_t now_ns = ((uint64_t)now.tv_sec * 1000000000ULL) + now.tv_nsec;
 
-    wisps_shm_ring_release(dp->ring);
+    wisps_ring_release(dp->ring);
 
     if (rc != 0) {
       wisp_atomic_fetch_add(&dp->stats.blit_errors, 1);
@@ -130,7 +130,6 @@ void wisps_data_plane_stop(wisps_data_plane_t *dp) {
   wisps_data_plane_kick(dp); /* unblock an epoll_wait() the loop may be parked in */
 }
 
-
 void wisps_data_plane_set_mode(wisps_data_plane_t *dp, uint32_t width,
                                uint32_t height) {
   /* this is a deliberately lock-free, best-effort update raced against
@@ -141,12 +140,12 @@ void wisps_data_plane_set_mode(wisps_data_plane_t *dp, uint32_t width,
     fprintf(stderr, "[data_plane] sink re-open failed at %ux%u\n", width, height);
 }
 
-
 void wisps_data_plane_kick(wisps_data_plane_t *dp) {
+  if (!dp)
+    return;
   uint64_t v = 1;
   ssize_t n;
   do {
     n = write(dp->abort_fd, &v, sizeof(v));
   } while (n < 0 && errno == EINTR);
 }
-

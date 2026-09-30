@@ -57,7 +57,7 @@ struct FakeProducer {
   int fd = -1;
   std::atomic<bool> active{false};
   std::atomic<bool> running{false};
-  wisp_render_mode_t negotiated_mode{};
+  wisp_resolution_t negotiated_mode{};
   pthread_t thread{};
 };
 
@@ -97,13 +97,13 @@ void *FakeProducerLoop(void *arg) {
   return nullptr;
 }
 
-// Connects to WISPS_CONTROL_SOCK_PATH, performs the CONNECT/MODE negotiation and the
+// Connects to WISP_CONTROL_SOCK_PATH, performs the CONNECT/MODE negotiation and the
 // initial ACTIVATE_REQUEST/GRANT-or-DENY handshake synchronously (mirroring
 // wispc_connect()'s shape, minus the shm ring attach this suite doesn't need), then
 // spawns a background thread to track subsequent async GRANT/DEACTIVATE messages.
 // Returns nullptr (never asserts) on any failure so callers can ASSERT_NE with a clear
 // gtest failure message.
-FakeProducer *FakeProducerConnect(const char *client_id, const wisp_render_mode_t *modes,
+FakeProducer *FakeProducerConnect(const char *client_id, const wisp_resolution_t *modes,
                                   int num_modes) {
   int fd = socket(AF_UNIX, SOCK_STREAM, 0);
   if (fd < 0)
@@ -112,7 +112,7 @@ FakeProducer *FakeProducerConnect(const char *client_id, const wisp_render_mode_
   struct sockaddr_un addr;
   memset(&addr, 0, sizeof(addr));
   addr.sun_family = AF_UNIX;
-  strncpy(addr.sun_path, WISPS_CONTROL_SOCK_PATH, sizeof(addr.sun_path) - 1);
+  strncpy(addr.sun_path, WISP_CONTROL_SOCK_PATH, sizeof(addr.sun_path) - 1);
 
   bool connected = false;
   for (int attempt = 0; attempt < 100; attempt++) {
@@ -199,7 +199,7 @@ void FakeProducerDisconnect(FakeProducer *fp) {
 class ControlPlaneTest : public ::testing::Test {
 protected:
   void SetUp() override {
-    ring_ = wisps_shm_ring_create();
+    ring_ = wisps_ring_create();
     ASSERT_NE(ring_, nullptr);
     frame_fd_ = wisps_shm_frame_fd_create();
     ASSERT_GE(frame_fd_, 0);
@@ -207,7 +207,7 @@ protected:
     ASSERT_EQ(wisps_control_query_channel_init(&chan_), 0);
     ASSERT_EQ(wisps_admin_plane_init(&ap_, &chan_), 0);
 
-    wisp_render_mode_t modes[1] = {{320, 240, 60}};
+    wisp_resolution_t modes[1] = {{320, 240, 60}};
     ASSERT_EQ(wisps_control_plane_init(&cp_, ring_, frame_fd_, nullptr, &chan_, modes, 1),
               0);
 
@@ -226,7 +226,7 @@ protected:
     wisps_control_plane_close(&cp_);
 
     wisps_control_query_channel_close(&chan_);
-    wisps_shm_ring_destroy(ring_);
+    wisps_ring_destroy(ring_);
     if (frame_fd_ >= 0)
       close(frame_fd_);
   }
@@ -241,7 +241,7 @@ protected:
 };
 
 TEST_F(ControlPlaneTest, ClientConnectsAndActivatesImmediately) {
-  wisp_render_mode_t modes[1] = {{320, 240, 60}};
+  wisp_resolution_t modes[1] = {{320, 240, 60}};
   FakeProducer *w = FakeProducerConnect("sine_wave_cpu", modes, 1);
   ASSERT_NE(w, nullptr);
   EXPECT_TRUE(w->active.load());
@@ -250,7 +250,7 @@ TEST_F(ControlPlaneTest, ClientConnectsAndActivatesImmediately) {
 }
 
 TEST_F(ControlPlaneTest, AdminListReflectsRealConnectedClient) {
-  wisp_render_mode_t modes[1] = {{320, 240, 60}};
+  wisp_resolution_t modes[1] = {{320, 240, 60}};
   FakeProducer *w = FakeProducerConnect("sine_wave_cpu", modes, 1);
   ASSERT_NE(w, nullptr);
 
@@ -278,7 +278,7 @@ TEST_F(ControlPlaneTest, AdminListReflectsRealConnectedClient) {
 }
 
 TEST_F(ControlPlaneTest, AdminSwitchBetweenTwoClientsSucceeds) {
-  wisp_render_mode_t modes[1] = {{320, 240, 60}};
+  wisp_resolution_t modes[1] = {{320, 240, 60}};
   FakeProducer *w1 = FakeProducerConnect("app_one", modes, 1);
   ASSERT_NE(w1, nullptr);
   FakeProducer *w2 = FakeProducerConnect("app_two", modes, 1);

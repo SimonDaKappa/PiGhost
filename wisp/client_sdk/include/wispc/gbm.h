@@ -1,6 +1,8 @@
 #ifndef WISPC_GBM_H
 #define WISPC_GBM_H
 
+// $$$SIMON might want to wrap this into render.h::*dmabuf config
+
 #include <wisp/gbm.h>
 #if WISP_READY_FOR_GBM
 

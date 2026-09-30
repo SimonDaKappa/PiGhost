@@ -34,7 +34,7 @@ extern "C" {
  *                    updates. guards bookkeeping only, never the pixel copy
  *
  * Never allocate or copy this struct by value, only ever map it at a fixed address via
- * @wisps_shm_ring_create() and @wispc_shm_attach().
+ * @wisps_ring_create() and @wispc_shm_attach().
  *
  * @note layout is byte-for-byte identical across payload mode. The dmabuf mode is
  * purely a control-plane extension; slot indices mean the same thing in both modes.
@@ -47,7 +47,7 @@ typedef struct {
   WISP_ATOMIC WISP_CACHELINE_FIELD(int32_t, latest_ready);
   WISP_ATOMIC WISP_CACHELINE_FIELD(int32_t, server_locked);
   WISP_ATOMIC WISP_CACHELINE_FIELD(int32_t, client_locked);
-  WISP_ATOMIC WISP_CACHELINE_FIELD(uint32_t, frame_counter);
+  WISP_ATOMIC WISP_CACHELINE_FIELD(uint64_t, frame_counter);
   WISP_ATOMIC WISP_CACHELINE_FIELD(uint32_t, generation);
   uint64_t frame_id[WISP_NUM_BUFFERS];
   uint64_t write_ts_ns[WISP_NUM_BUFFERS];
@@ -68,12 +68,12 @@ WISP_SASSERT(offsetof(wisp_shm_ring_t, generation) == 4 * WISP_CACHELINE,
 WISP_SASSERT(WISP_ALIGNOF(wisp_shm_ring_t) == WISP_CACHELINE, "ring alignment drift");
 
 /**
- * wisp_shm_ring_lock() - acquire @ring's bookkeeping mutex
+ * wisp_ring_lock() - acquire @ring's bookkeeping mutex
  * @ring: attached/created ring
  *
  * Recovers from a prior holder crashing (EOWNERDEAD) instead of deadlocking.
  */
-static void wisp_shm_ring_lock(wisp_shm_ring_t *ring) {
+static void wisp_ring_lock(wisp_shm_ring_t *ring) {
   int rc = pthread_mutex_lock(&ring->bookkeeping_lock);
   if (rc == EOWNERDEAD) {
     pthread_mutex_consistent(&ring->bookkeeping_lock);
@@ -81,16 +81,15 @@ static void wisp_shm_ring_lock(wisp_shm_ring_t *ring) {
 }
 
 /**
- * wisp_shm_ring_unlock() - release @ring's bookkeeping mutex
+ * wisp_ring_unlock() - release @ring's bookkeeping mutex
  * @ring: attached/created ring
  */
-static void wisp_shm_ring_unlock(wisp_shm_ring_t *ring) {
+static void wisp_ring_unlock(wisp_shm_ring_t *ring) {
   pthread_mutex_unlock(&ring->bookkeeping_lock);
 }
 
 /**
- * wisp_shm_ring_write_slot() - claim a free buffer index for the producer side to
- * write into
+ * wisp_ring_claim_slot() - claim a free buffer index for the client to write into
  * @ring: attached/created ring
  *
  * Picks any index that is neither the currently-published frame (@latest_ready) nor
@@ -107,8 +106,8 @@ static void wisp_shm_ring_unlock(wisp_shm_ring_t *ring) {
  *
  * Return: a writable buffer index (0..WISP_NUM_BUFFERS-1).
  */
-static int wisp_shm_ring_write_slot(wisp_shm_ring_t *ring) {
-  wisp_shm_ring_lock(ring);
+static int wisp_ring_claim_slot(wisp_shm_ring_t *ring) {
+  wisp_ring_lock(ring);
   int ready = wisp_atomic_load(&ring->latest_ready);
   int server_locked = wisp_atomic_load(&ring->server_locked);
   int client_locked = wisp_atomic_load(&ring->client_locked);
@@ -116,7 +115,7 @@ static int wisp_shm_ring_write_slot(wisp_shm_ring_t *ring) {
   if (client_locked != -1) {
     /* Caller broke a *very important* invariant: let them crash. The server can
      * recover from this (it never depends on a well-behaved producer). */
-    wisp_shm_ring_unlock(ring);
+    wisp_ring_unlock(ring);
     abort();
   }
 
@@ -129,24 +128,38 @@ static int wisp_shm_ring_write_slot(wisp_shm_ring_t *ring) {
   }
 
   if (client_locked == -1) {
-    wisp_shm_ring_unlock(ring);
+    wisp_ring_unlock(ring);
     abort();
   }
 
   wisp_atomic_store(&ring->client_locked, client_locked);
-  wisp_shm_ring_unlock(ring);
+  wisp_ring_unlock(ring);
+  return client_locked;
+}
+
+/**
+ * wisp_ring_free_slot() - release the client's claim on a buffer index
+ * @ring: attached/created ring
+ *
+ * Return: the buffer index that was released (0..WISP_NUM_BUFFERS-1).
+ */
+static int wisp_ring_free_slot(wisp_shm_ring_t *ring) {
+  wisp_ring_lock(ring);
+  int client_locked = wisp_atomic_load(&ring->client_locked);
+  wisp_atomic_store(&ring->client_locked, -1);
+  wisp_ring_unlock(ring);
   return client_locked;
 }
 
 /**
  * wisp_shm_ring_publish_slot() - publish a finished frame as the newest ready
  * @ring:     attached ring
- * @idx:      buffer index previously returned by wisp_shm_ring_write_slot()
+ * @idx:      buffer index previously returned by wisp_ring_claim_slot()
  * @frame_id: producer-assigned monotonically increasing frame id
  * @now_ns:   timestamp the write completed (CLOCK_MONOTONIC), used by the server for
  *            latency accounting
  *
- * Low-level ring-ownership primitive (see wisp_shm_ring_write_slot()). Callers that
+ * Low-level ring-ownership primitive (see wisp_ring_claim_slot()). Callers that
  * need the frame-ready eventfd post and generation/eviction check should use their
  * side's higher-level wrapper (e.g. wispc_publish()) instead of calling this directly.
  */
@@ -154,38 +167,38 @@ static void wisp_shm_ring_publish_slot(wisp_shm_ring_t *ring, int idx,
                                        uint64_t frame_id, uint64_t now_ns) {
   ring->frame_id[idx] = frame_id;
   ring->write_ts_ns[idx] = now_ns;
-  wisp_shm_ring_lock(ring);
+  wisp_ring_lock(ring);
   wisp_atomic_store(&ring->latest_ready, idx);
   wisp_atomic_store(&ring->client_locked, -1);
-  wisp_shm_ring_unlock(ring);
+  wisp_ring_unlock(ring);
 }
 
 // ===========================================================================
 // Control protocol
 // ===========================================================================
 
-#define WISPS_CONTROL_SOCK_PATH "/dev/shm/frame_ring_control.sock"
+#define WISP_CONTROL_SOCK_PATH "/dev/shm/frame_ring_control.sock"
 #define WISP_MAX_MODES 4
 #define WISP_DENY_REASON_LEN 64
 
 /**
- * WISP_CLIENT_HEARTBEAT_MS - client's HEARTBEAT send period, in ms
+ * WISP_HEARTBEAT_MS - client's HEARTBEAT send period, in ms
  *
  * Shared by both sides (not client-only): the client's ctrl thread sends a
  * heartbeat this often while active; the server's session table uses a
- * multiple of this (see WISP_CLIENT_HEARTBEAT_TIMEOUT_MS) to detect a dead ACTIVE
+ * multiple of this (see WISP_HEARTBEAT_TIMEOUT_MS) to detect a dead ACTIVE
  * client.
  */
-#define WISP_CLIENT_HEARTBEAT_MS 500
+#define WISP_HEARTBEAT_MS 500
 
 /**
- * WISP_CLIENT_HEARTBEAT_TIMEOUT_MS - server's ACTIVE-client dead-heartbeat cutoff
+ * WISP_HEARTBEAT_TIMEOUT_MS - server's ACTIVE-client dead-heartbeat cutoff
  *
  * If an ACTIVE client's last heartbeat is older than this, the server
- * evicts it. Chosen as 2 * WISP_CLIENT_HEARTBEAT_MS to tolerate exactly one dropped
+ * evicts it. Chosen as 2 * WISP_HEARTBEAT_MS to tolerate exactly one dropped
  * heartbeat before acting.
  */
-#define WISP_CLIENT_HEARTBEAT_TIMEOUT_MS (2 * WISP_CLIENT_HEARTBEAT_MS)
+#define WISP_HEARTBEAT_TIMEOUT_MS (2 * WISP_HEARTBEAT_MS)
 
 /**
  * WISP_CLIENT_RETRY_ACTIVATE_MS - client's timeout between activation requests, in ms
@@ -287,7 +300,7 @@ typedef struct {
   uint32_t protocol_minor;
   char client_id[WISP_CLIENT_ID_LEN];
   uint32_t num_modes;
-  wisp_render_mode_t modes[WISP_MAX_MODES];
+  wisp_resolution_t modes[WISP_MAX_MODES];
 } wisp_connect_msg_t;
 
 /**
@@ -310,7 +323,7 @@ typedef struct {
  */
 typedef struct {
   uint8_t accepted;
-  wisp_render_mode_t chosen;
+  wisp_resolution_t chosen;
 } wisp_mode_msg_t;
 
 /**
@@ -359,10 +372,14 @@ typedef struct {
  * @WISP_GRANT_DECLINE_PROMOTION_FAILED: the client's own sched_setattr()/
  *                                       sched_setscheduler() self-promotion call failed
  *                                       (e.g. missing CAP_SYS_NICE)
+ * @WISP_GRANT_DECLINE_INVALID_PACING:   the client requested paced-clock rendering but
+ *                                       the grant carried no usable period_ns to pace 
+ *                                       against
  */
 typedef enum {
   WISP_GRANT_DECLINE_WARMUP_FAILED = 1,
   WISP_GRANT_DECLINE_PROMOTION_FAILED = 2,
+  WISP_GRANT_DECLINE_INVALID_PACING = 3,
 } wisp_grant_decline_reason_t;
 
 /**

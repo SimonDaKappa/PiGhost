@@ -8,7 +8,7 @@
 
 #include "server_shm.h"
 
-wisp_shm_ring_t *wisps_shm_ring_create(void) {
+wisp_shm_ring_t *wisps_ring_create(void) {
   if (!__atomic_always_lock_free(sizeof(int32_t), 0) ||
       !__atomic_always_lock_free(sizeof(uint32_t), 0)) {
     fprintf(stderr,
@@ -57,7 +57,7 @@ wisp_shm_ring_t *wisps_shm_ring_create(void) {
   return ring;
 }
 
-void wisps_shm_ring_destroy(wisp_shm_ring_t *ring) {
+void wisps_ring_destroy(wisp_shm_ring_t *ring) {
   if (ring) {
     pthread_mutex_destroy(&ring->bookkeeping_lock);
     munmap(ring, sizeof(wisp_shm_ring_t));
@@ -72,28 +72,28 @@ int wisps_shm_frame_fd_create(void) {
   return fd;
 }
 
-int wisps_shm_ring_checkout(wisp_shm_ring_t *ring) {
-  wisp_shm_ring_lock(ring);
+int wisps_ring_checkout(wisp_shm_ring_t *ring) {
+  wisp_ring_lock(ring);
   int idx = wisp_atomic_load(&ring->latest_ready);
   if (idx >= 0)
     wisp_atomic_store(&ring->server_locked, idx);
-  wisp_shm_ring_unlock(ring);
+  wisp_ring_unlock(ring);
   return idx;
 }
 
-void wisps_shm_ring_release(wisp_shm_ring_t *ring) {
-  wisp_shm_ring_lock(ring);
+void wisps_ring_release(wisp_shm_ring_t *ring) {
+  wisp_ring_lock(ring);
   wisp_atomic_store(&ring->server_locked, -1);
-  wisp_shm_ring_unlock(ring);
+  wisp_ring_unlock(ring);
 }
 
-void wisps_evict_client(wisp_shm_ring_t *ring) {
-  wisp_shm_ring_lock(ring);
+void wisps_ring_evict_client(wisp_shm_ring_t *ring) {
+  wisp_ring_lock(ring);
   wisp_atomic_fetch_add(&ring->generation, 1);
   wisp_atomic_store(&ring->latest_ready, -1);
   wisp_atomic_store(&ring->server_locked, -1);
   wisp_atomic_store(&ring->client_locked, -1);
-  wisp_shm_ring_unlock(ring);
+  wisp_ring_unlock(ring);
 }
 
 int wisps_dmabuf_set_from_announce(wisps_dmabuf_set_t *set,

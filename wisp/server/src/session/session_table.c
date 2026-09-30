@@ -21,7 +21,7 @@ int wisps_session_table_add(wisps_session_table_t *table, int fd) {
       table->slots[i].in_use = true;
       table->slots[i].ctrl_fd = fd;
       table->slots[i].state = WISPS_SESSION_CONNECTED;
-      table->slots[i].payload_kind = WISP_PAYLOAD_PIXELS;
+      table->slots[i].render_kind = WISP_PAYLOAD_PIXELS;
       return i;
     }
   }
@@ -128,7 +128,7 @@ int wisps_session_table_check_heartbeat_timeouts(wisps_session_table_t *table,
                       (int64_t)table->slots[idx].last_heartbeat_monotonic.tv_nsec;
   int64_t elapsed_ms = sec_diff * 1000 + nsec_diff / 1000000;
 
-  if (elapsed_ms > WISP_CLIENT_HEARTBEAT_TIMEOUT_MS) {
+  if (elapsed_ms > WISP_HEARTBEAT_TIMEOUT_MS) {
     wisps_session_table_deactivate(table, idx);
     return idx;
   }

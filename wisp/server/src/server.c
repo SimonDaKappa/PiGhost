@@ -22,7 +22,7 @@
  * Hardcoded for now since no config-file/CLI plumbing exists yet; the first
  * entry also seeds the data-plane's initial frame size before any client
  * has negotiated a mode. */
-static const wisp_render_mode_t g_supported_modes[] = {
+static const wisp_resolution_t g_supported_modes[] = {
     {320, 240, 60},
     {640, 480, 60},
     {1280, 720, 30},
@@ -35,7 +35,7 @@ static const wisp_render_mode_t g_supported_modes[] = {
 static const char *g_frame_out_dir = "/tmp/wisp_frames";
 
 int main(void) {
-  wisp_shm_ring_t *ring = wisps_shm_ring_create();
+  wisp_shm_ring_t *ring = wisps_ring_create();
   if (!ring) {
     fprintf(stderr, "[wisp_server] failed to create shm ring\n");
     return 1;
@@ -44,7 +44,7 @@ int main(void) {
   int frame_fd = wisps_shm_frame_fd_create();
   if (frame_fd < 0) {
     fprintf(stderr, "[wisp_server] failed to create frame-ready eventfd\n");
-    wisps_shm_ring_destroy(ring);
+    wisps_ring_destroy(ring);
     return 1;
   }
 
@@ -58,7 +58,7 @@ int main(void) {
     fprintf(stderr, "[wisp_server] failed to create file sink at %s\n",
             g_frame_out_dir);
     close(frame_fd);
-    wisps_shm_ring_destroy(ring);
+    wisps_ring_destroy(ring);
     return 1;
   }
 
@@ -68,7 +68,7 @@ int main(void) {
     fprintf(stderr, "[wisp_server] failed to init data plane\n");
     wisps_fb_sink_close(&sink);
     close(frame_fd);
-    wisps_shm_ring_destroy(ring);
+    wisps_ring_destroy(ring);
     return 1;
   }
 
@@ -77,7 +77,7 @@ int main(void) {
     fprintf(stderr, "[wisp_server] failed to init control-query channel\n");
     wisps_fb_sink_close(&sink);
     close(frame_fd);
-    wisps_shm_ring_destroy(ring);
+    wisps_ring_destroy(ring);
     return 1;
   }
 
@@ -87,7 +87,7 @@ int main(void) {
     wisps_control_query_channel_close(&chan);
     wisps_fb_sink_close(&sink);
     close(frame_fd);
-    wisps_shm_ring_destroy(ring);
+    wisps_ring_destroy(ring);
     return 1;
   }
 
@@ -99,7 +99,7 @@ int main(void) {
     wisps_control_query_channel_close(&chan);
     wisps_fb_sink_close(&sink);
     close(frame_fd);
-    wisps_shm_ring_destroy(ring);
+    wisps_ring_destroy(ring);
     return 1;
   }
 
@@ -120,7 +120,7 @@ int main(void) {
 
   printf("[wisp_server] running: admin=%s control=%s shm=%s frames=%s "
          "(SIGINT/SIGTERM to stop)\n",
-         WISPS_ADMIN_SOCK_PATH, WISPS_CONTROL_SOCK_PATH, WISP_SHM_NAME,
+         WISPS_ADMIN_SOCK_PATH, WISP_CONTROL_SOCK_PATH, WISP_SHM_NAME,
          g_frame_out_dir);
   fflush(stdout);
 
@@ -149,7 +149,7 @@ int main(void) {
 
   wisps_control_query_channel_close(&chan);
   close(frame_fd);
-  wisps_shm_ring_destroy(ring);
+  wisps_ring_destroy(ring);
 
   return 0;
 }

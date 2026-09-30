@@ -50,8 +50,8 @@ void *FakeControlThread(void *arg) {
               WISP_CLIENT_ID_LEN - 1);
       q->list_response.clients[0].state = WISPS_ADMIN_STATE_NEGOTIATED;
       q->list_response.clients[0].negotiated_mode =
-          wisp_render_mode_t{.width = 320, .height = 240, .fps = 60};
-      q->list_response.clients[0].payload_kind = WISP_PAYLOAD_PIXELS;
+          wisp_resolution_t{.width = 320, .height = 240};
+      q->list_response.clients[0].render_kind = WISP_PAYLOAD_PIXELS;
     } else { // WISPS_CTRL_QUERY_SWITCH
       if (strcmp(q->switch_client_id, "sine_wave_cpu") == 0) {
         q->switch_response.ok = 1;
@@ -125,8 +125,8 @@ TEST_F(AdminPlaneTest, ListRequestReturnsSnapshotFromControlThread) {
   int fd = AdminClientConnect();
   ASSERT_GE(fd, 0);
   ASSERT_EQ(wisp_ctrl_send(fd,
-                            static_cast<wisp_msg_kind_t>(WISPS_ADMIN_MSG_LIST_REQUEST),
-                            nullptr, 0),
+                           static_cast<wisp_msg_kind_t>(WISPS_ADMIN_MSG_LIST_REQUEST),
+                           nullptr, 0),
             0);
 
   unsigned char buf[4096];
@@ -152,10 +152,10 @@ TEST_F(AdminPlaneTest, SwitchRequestForKnownAppSucceeds) {
 
   wisps_admin_switch_request_t req{};
   strncpy(req.client_id, "sine_wave_cpu", WISP_CLIENT_ID_LEN - 1);
-  ASSERT_EQ(
-      wisp_ctrl_send(fd, static_cast<wisp_msg_kind_t>(WISPS_ADMIN_MSG_SWITCH_REQUEST),
-                      &req, sizeof(req)),
-      0);
+  ASSERT_EQ(wisp_ctrl_send(fd,
+                           static_cast<wisp_msg_kind_t>(WISPS_ADMIN_MSG_SWITCH_REQUEST),
+                           &req, sizeof(req)),
+            0);
 
   unsigned char buf[4096];
   wisp_msg_kind_t type;
@@ -176,10 +176,10 @@ TEST_F(AdminPlaneTest, SwitchRequestForUnknownAppFailsWithReason) {
 
   wisps_admin_switch_request_t req{};
   strncpy(req.client_id, "nonexistent_app", WISP_CLIENT_ID_LEN - 1);
-  ASSERT_EQ(
-      wisp_ctrl_send(fd, static_cast<wisp_msg_kind_t>(WISPS_ADMIN_MSG_SWITCH_REQUEST),
-                      &req, sizeof(req)),
-      0);
+  ASSERT_EQ(wisp_ctrl_send(fd,
+                           static_cast<wisp_msg_kind_t>(WISPS_ADMIN_MSG_SWITCH_REQUEST),
+                           &req, sizeof(req)),
+            0);
 
   unsigned char buf[4096];
   wisp_msg_kind_t type;

@@ -1,8 +1,8 @@
 #ifndef WISP_INTERNAL_H
 #define WISP_INTERNAL_H
 
-#include <stdint.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <time.h>
 
 #ifdef __cplusplus
@@ -23,12 +23,18 @@ extern "C" {
 #define WISP_ALIGNOF(t) _Alignof(t)
 #endif
 
+#define WISP_CONTAINER_OF(ptr, type, member)                                           \
+  ({                                                                                   \
+    const typeof(((type *)0)->member) *__mptr = (ptr);                                 \
+    (type *)((char *)__mptr - offsetof(type, member));                                 \
+  })
+
 #define WISP_CAT_(a, b) a##b
 #define WISP_CAT(a, b) WISP_CAT_(a, b)
 
 #define WISP_CACHELINE 64
-/* Reserve an **entire cache line** for this field. Pads with 
- * WISP_CACHELINE - sizeof(type) bytes in anon. union. 
+/* Reserve an **entire cache line** for this field. Pads with
+ * WISP_CACHELINE - sizeof(type) bytes in anon. union.
  *
  * Use very sparingly.
  */
@@ -122,7 +128,8 @@ static inline void wisp__atomic_store_bool(bool *p, bool v) {
       bool *: wisp__atomic_store_bool)((p), (v))
 
 #define wisp_atomic_fetch_add(p, v)                                                    \
-  _Generic((p), uint32_t *: wisp__atomic_fetch_add_u32,                                \
+  _Generic((p),                                                                        \
+      uint32_t *: wisp__atomic_fetch_add_u32,                                          \
       uint64_t *: wisp__atomic_fetch_add_u64)((p), (v))
 
 /* Have to use overload resolution for C++, so below extern "C" closer maps directly
@@ -161,14 +168,17 @@ static inline uint64_t wisp_atomic_fetch_add(uint64_t *p, uint64_t v) {
 }
 
 extern "C" {
-
 #endif /* __cplusplus */
 
-static inline uint64_t wisp_ts_diff_ns(struct timespec a, struct timespec b) {
-  int64_t sec_diff = (int64_t)a.tv_sec - (int64_t)b.tv_sec;
-  int64_t nsec_diff = (int64_t)a.tv_nsec - (int64_t)b.tv_nsec;
-  int64_t total = sec_diff * 1000000000LL + nsec_diff;
-  return total > 0 ? (uint64_t)total : 0;
+static inline uint64_t wisp_ts_to_ns(const struct timespec *ts) {
+  return ((uint64_t)ts->tv_sec * 1000000000ULL) + ts->tv_nsec;
+}
+
+static inline struct timespec wisp_ns_to_ts(uint64_t ns) {
+  struct timespec ts;
+  ts.tv_sec = ns / 1000000000ULL;
+  ts.tv_nsec = ns % 1000000000ULL;
+  return ts;
 }
 
 #ifdef __cplusplus

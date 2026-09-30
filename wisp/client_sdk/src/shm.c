@@ -44,19 +44,3 @@ wisp_shm_ring_t *wispc_shm_attach(int max_retries, int retry_delay_ms) {
   }
   return ring;
 }
-
-/**
- * wispc_shm_publish() - publish a finished frame as the newest ready
- * @ring:     attached ring
- * @idx:      buffer index previously returned by wispc_write_slot()
- * @frame_id: client-assigned monotonically increasing frame id
- * @now_ns:   timestamp the write completed (CLOCK_MONOTONIC), used by the server for
- *            latency accounting
- *
- * Low-level primitive; client applications normally call wispc_publish()
- * instead, which also handles the semaphore post and generation/eviction check.
- */
-void wispc_shm_publish(wisp_shm_ring_t *ring, int idx, uint64_t frame_id,
-                       uint64_t now_ns) {
-  wisp_shm_ring_publish_slot(ring, idx, frame_id, now_ns);
-}

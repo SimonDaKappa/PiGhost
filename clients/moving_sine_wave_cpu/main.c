@@ -1,3 +1,5 @@
+// TODO: Disabled until SDK reaches stable API.
+#if 0
 // main.c - moving_sine_wave_cpu: a reference CPU-pixel producer app.
 //
 // Draws a single animated sine wave curve scrolling left-to-right across
@@ -111,9 +113,9 @@ int main(void) {
   }
 
   pgdp_render_mode_t mode = pgdpc_negotiated_mode(ctx);
-  double frame_interval_s = mode.fps > 0 ? 1.0 / (double)mode.fps : 1.0 / 60.0;
-  printf("[sine_wave_cpu] negotiated %ux%u@%ufps, frame interval=%.3fms\n", mode.width,
-         mode.height, mode.fps, frame_interval_s * 1000.0);
+  double frame_interval_s = 1.0 / 60.0;
+  printf("[sine_wave_cpu] negotiated %ux%u @%ufps, frame interval=%.3fms\n", mode.width,
+         mode.height, 60, frame_interval_s * 1000.0);
 
   double phase = 0.0;
   const double phase_speed = 2.5; /* radians/sec */
@@ -142,7 +144,7 @@ int main(void) {
        * it every tick since it's cheap and this is the source of truth
        * for the buffer size we're about to write. */
       mode = pgdpc_negotiated_mode(ctx);
-      frame_interval_s = mode.fps > 0 ? 1.0 / (double)mode.fps : 1.0 / 60.0;
+      frame_interval_s = 1.0 / 60.0;
 
       int idx = pgdpc_write_slot(ctx);
       if (idx >= 0) {
@@ -196,3 +198,5 @@ int main(void) {
   pgdpc_disconnect(ctx);
   return 0;
 }
+
+#endif /* #if 0 */

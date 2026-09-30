@@ -33,5 +33,8 @@
             }
         ]
     },
-    
+    "editor.tabSize": 2,
+    "editor.insertSpaces": true,
+    "editor.detectIndentation": true,
+    "cmake.sourceDirectory": "/home/e1438784/workspaces/PiGhost/wisp"
 }

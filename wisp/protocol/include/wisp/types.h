@@ -1,6 +1,7 @@
 #ifndef WISP_TYPES_H
 #define WISP_TYPES_H
 
+#include <stdbool.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -16,27 +17,25 @@ extern "C" {
   ((size_t)WISP_FRAME_MAX_WIDTH * WISP_FRAME_MAX_HEIGHT * WISP_BYTES_PER_PIXEL)
 
 /**
- * struct wisp_render_mode_t - arbitrated resolution/frame rate
+ * struct wisp_resolution_t - arbitrated resolution
  * @width:  pixels per row
  * @height: rows per frame
- * @fps:    frames per second
  *
  * Always 1:1 with the physical panel; no scaling or interpolation.
  */
 typedef struct {
   uint32_t width;
   uint32_t height;
-  uint32_t fps;
-} wisp_render_mode_t;
+} wisp_resolution_t;
 
 /**
- * typedef wisp_payload_kind_t - what a ring slot index refers to
+ * typedef wisp_render_kind_t - what a ring slot index refers to
  * @WISP_PAYLOAD_PIXELS: raw bytes in ring->frame_bufs[idx] (default)
  * @WISP_PAYLOAD_DMABUF: the client's announced dmabuf[idx]
  */
-typedef uint32_t wisp_payload_kind_t;
-#define WISP_PAYLOAD_PIXELS ((wisp_payload_kind_t)0)
-#define WISP_PAYLOAD_DMABUF ((wisp_payload_kind_t)1)
+typedef uint32_t wisp_render_kind_t;
+#define WISP_PAYLOAD_PIXELS ((wisp_render_kind_t)0)
+#define WISP_PAYLOAD_DMABUF ((wisp_render_kind_t)1)
 
 /* DRM fourcc helpers, so clients don't need <drm_fourcc.h> just for this. Values match
  * the kernel's DRM_FORMAT_* definitions. */

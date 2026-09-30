@@ -88,8 +88,8 @@ typedef enum {
  *                              for FIFO ordering once queue-position reporting is
  *                              implemented (queue membership/order is derived from
  *                              this timestamp, not tracked in a separate structure)
- * @payload_kind:               PIXELS until a DMABUF_ANNOUNCE is ACKed
- * @dmabuf_set:                 valid only when payload_kind == WISP_PAYLOAD_DMABUF
+ * @render_kind:               PIXELS until a DMABUF_ANNOUNCE is ACKed
+ * @dmabuf_set:                 valid only when render_kind == WISP_PAYLOAD_DMABUF
  *
  * One array slot in session table. Never accessed outside the control-plane thread.
  */
@@ -98,14 +98,14 @@ typedef struct {
   int ctrl_fd;
   char client_id[WISP_CLIENT_ID_LEN];
   wisps_session_state_t state;
-  wisp_render_mode_t offered_modes[WISP_MAX_MODES];
+  wisp_resolution_t offered_modes[WISP_MAX_MODES];
   uint32_t num_offered_modes;
-  wisp_render_mode_t negotiated_mode;
+  wisp_resolution_t negotiated_mode;
   uint32_t negotiated_protocol_minor;
   uint32_t granted_generation;
   struct timespec last_heartbeat_monotonic;
   struct timespec activate_requested_monotonic;
-  wisp_payload_kind_t payload_kind;
+  wisp_render_kind_t render_kind;
   wisps_dmabuf_set_t dmabuf_set;
 } wisps_session_t;
 
@@ -277,7 +277,7 @@ void wisps_session_table_remove(wisps_session_table_t *table, int idx);
  * @now:   current CLOCK_MONOTONIC time
  *
  * If the ACTIVE_RT slot's last_heartbeat_monotonic is more than
- * WISP_CLIENT_HEARTBEAT_TIMEOUT_MS old, deactivate it. Only ever examines the
+ * WISP_HEARTBEAT_TIMEOUT_MS old, deactivate it. Only ever examines the
  * ACTIVE_RT slot (NEGOTIATED clients don't heartbeat). Does not send
  * WISP_MSG_DEACTIVATE or bump the ring generation itself. The caller
  * (control-plane loop) is responsible for that, mirroring the split between this
